@@ -8,17 +8,26 @@ export function ensureConfigDir(): void {
   }
 }
 
-export function accountsFileExists(): boolean {
-  return existsSync(ACCOUNTS_PATH);
+export function accountsFileExists(path?: string): boolean {
+  return existsSync(path ?? ACCOUNTS_PATH);
 }
 
 export function readAccountsRaw(): unknown[] {
-  if (!existsSync(ACCOUNTS_PATH)) return [];
+  return readRawFromPath(ACCOUNTS_PATH);
+}
+
+function readRawFromPath(path: string): unknown[] {
+  if (!existsSync(path)) return [];
   try {
-    return JSON.parse(readFileSync(ACCOUNTS_PATH, "utf-8"));
+    return JSON.parse(readFileSync(path, "utf-8"));
   } catch {
     return [];
   }
+}
+
+/** Deserialize Account[] from an explicit file path */
+export function readAccountsFromPath(path: string): Account[] {
+  return deserialize(readRawFromPath(path) as AccountRecord[]);
 }
 
 // Escritura atómica: escribe a .tmp y renombra — evita JSON corrupto si el proceso muere mid-write
@@ -29,10 +38,13 @@ export function writeAccountsAtomic(data: unknown[]): void {
   renameSync(tmp, ACCOUNTS_PATH);
 }
 
-/** Deserialize flat AccountRecord[] from disk into runtime Account[] */
+/** Deserialize flat AccountRecord[] from the default path into runtime Account[] */
 export function loadAccounts(): Account[] {
-  const raw = readAccountsRaw() as AccountRecord[];
-  return raw.map(a => ({
+  return deserialize(readAccountsRaw() as AccountRecord[]);
+}
+
+function deserialize(records: AccountRecord[]): Account[] {
+  return records.map(a => ({
     id: a.id,
     tokens: {
       accessToken: a.accessToken,

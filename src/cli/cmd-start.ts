@@ -23,6 +23,7 @@ export function registerStart(program: Command): void {
         litellmUrl: opts.litellm
           ? (typeof opts.litellm === "string" ? opts.litellm : "http://localhost:4000")
           : undefined,
+        accountsPath: opts.accounts !== ACCOUNTS_PATH ? opts.accounts : undefined,
       });
     });
 }

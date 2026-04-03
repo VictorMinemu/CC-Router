@@ -6,7 +6,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, accountsFileExists } from "../config/manager.js";
+import { loadAccounts, accountsFileExists, readAccountsFromPath } from "../config/manager.js";
 import { logRoute, logError, logStartup } from "./logger.js";
 import { stats } from "./stats.js";
 import { PROXY_PORT } from "../config/paths.js";
@@ -34,13 +34,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const target = opts.litellmUrl ?? "https://api.anthropic.com";
   const mode = opts.litellmUrl ? "litellm" : "standalone";
 
-  if (!accountsFileExists()) {
+  const accountsPath = opts.accountsPath;
+
+  if (!accountsFileExists(accountsPath)) {
     console.error(chalk.red("\n✗ accounts.json not found."));
     console.error(chalk.yellow("  Run: cc-router setup\n"));
     process.exit(1);
   }
 
-  const accounts = loadAccounts();
+  const accounts = accountsPath ? readAccountsFromPath(accountsPath) : loadAccounts();
   if (accounts.length === 0) {
     console.error(chalk.red("\n✗ No accounts found in accounts.json."));
     console.error(chalk.yellow("  Run: cc-router setup\n"));
