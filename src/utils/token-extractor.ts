@@ -19,7 +19,12 @@ export async function extractFromKeychain(): Promise<OAuthTokens | null> {
       "-s", "Claude Code-credentials",
       "-w",
     ]);
-    return parseCredentialJson(stdout.trim());
+    const raw = JSON.parse(stdout.trim());
+    // Keychain JSON can be either:
+    //   { claudeAiOauth: { accessToken, refreshToken, ... }, mcpOAuth: {...} }
+    //   { accessToken, refreshToken, ... }  (direct, older versions)
+    const oauth = raw.claudeAiOauth ?? raw;
+    return parseCredentialJson(oauth);
   } catch {
     return null;
   }
