@@ -1,0 +1,44 @@
+model_list:
+  # ── Claude 4.6 (latest) ───────────────────────────────────────────────────
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: anthropic/claude-opus-4-6
+      # No api_key — Authorization header is injected by cc-router (OAuth token)
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+
+  # ── Claude 4.5 ────────────────────────────────────────────────────────────
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+
+  # ── Short-name aliases (Claude Code uses these interchangeably) ───────────
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5-20251001
+
+general_settings:
+  # CRITICAL: forward the Authorization header from cc-router to Anthropic.
+  # cc-router injects "Authorization: Bearer <oauth-token>" on every request.
+  # Without this setting, LiteLLM would strip it and auth would fail.
+  forward_client_headers_to_llm_api: true
+
+  # Master key for LiteLLM UI and virtual key management.
+  # Set LITELLM_MASTER_KEY in your environment or .env file.
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  # High timeouts for Claude Code long-running requests (thinking, agents)
+  request_timeout: 300
+  # Drop params not supported by a model silently (avoids errors on older models)
+  drop_params: true

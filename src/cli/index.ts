@@ -7,6 +7,7 @@ import { registerStatus } from "./cmd-status.js";
 import { registerAccounts } from "./cmd-accounts.js";
 import { registerService } from "./cmd-service.js";
 import { registerConfigure } from "./cmd-configure.js";
+import { registerDocker } from "./cmd-docker.js";
 
 const program = new Command();
 
@@ -26,6 +27,8 @@ Examples:
   $ cc-router service install    # Auto-start on system boot
   $ cc-router accounts list      # Show all configured accounts
   $ cc-router revert             # Restore Claude Code to normal (remove proxy config)
+  $ cc-router docker up          # Full stack: cc-router + LiteLLM in Docker
+  $ cc-router docker down        # Stop Docker stack
 `);
 
 registerSetup(program);
@@ -36,5 +39,6 @@ registerStatus(program);
 registerAccounts(program);
 registerService(program);
 registerConfigure(program);
+registerDocker(program);
 
 program.parse();

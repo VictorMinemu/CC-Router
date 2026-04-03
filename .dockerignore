@@ -1,0 +1,28 @@
+# Dev artifacts
+node_modules/
+dist/
+coverage/
+*.log
+
+# Secrets — never bake into image
+accounts.json
+.env
+*.pem
+*.key
+
+# Source maps and types (not needed at runtime)
+**/*.d.ts
+**/*.js.map
+
+# Planning and docs
+.planning/
+.claude/
+prd.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore

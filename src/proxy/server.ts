@@ -9,7 +9,7 @@ import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } fro
 import { loadAccounts, accountsFileExists, readAccountsFromPath } from "../config/manager.js";
 import { logRoute, logError, logStartup } from "./logger.js";
 import { stats } from "./stats.js";
-import { PROXY_PORT } from "../config/paths.js";
+import { PROXY_PORT, LITELLM_URL } from "../config/paths.js";
 import type { Account } from "./types.js";
 import chalk from "chalk";
 
@@ -30,9 +30,11 @@ export interface ServerOptions {
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const port = opts.port ?? PROXY_PORT;
 
-  // Direct-to-Anthropic (standalone) or via LiteLLM (full mode)
-  const target = opts.litellmUrl ?? "https://api.anthropic.com";
-  const mode = opts.litellmUrl ? "litellm" : "standalone";
+  // Direct-to-Anthropic (standalone) or via LiteLLM (full mode).
+  // Priority: explicit option > LITELLM_URL env var > direct to Anthropic
+  const litellmUrl = opts.litellmUrl ?? LITELLM_URL;
+  const target = litellmUrl ?? "https://api.anthropic.com";
+  const mode = litellmUrl ? "litellm" : "standalone";
 
   const accountsPath = opts.accountsPath;
 
