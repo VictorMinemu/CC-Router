@@ -10,7 +10,12 @@ import { CLAUDE_SETTINGS_PATH } from "../config/paths.js";
  *   - Do NOT append /v1 to ANTHROPIC_BASE_URL — Claude Code adds it automatically
  *   - Merges with existing settings, preserving all other keys
  */
-export function writeClaudeSettings(port: number): void {
+/**
+ * @param port - proxy port (used only when baseUrl is not provided)
+ * @param baseUrl - full proxy URL e.g. "http://192.168.1.50:3456" or "https://cc-router.example.com"
+ *                  If omitted, defaults to http://localhost:<port>
+ */
+export function writeClaudeSettings(port: number, baseUrl?: string): void {
   const dir = dirname(CLAUDE_SETTINGS_PATH);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
@@ -24,13 +29,14 @@ export function writeClaudeSettings(port: number): void {
   }
 
   const existingEnv = (existing["env"] as Record<string, unknown>) ?? {};
+  // ANTHROPIC_BASE_URL: no trailing /v1 — Claude Code appends it automatically
+  const resolvedUrl = baseUrl ?? `http://localhost:${port}`;
 
   const updated = {
     ...existing,
     env: {
       ...existingEnv,
-      // ANTHROPIC_BASE_URL: no trailing /v1 — Claude Code appends it automatically
-      ANTHROPIC_BASE_URL: `http://localhost:${port}`,
+      ANTHROPIC_BASE_URL: resolvedUrl,
       // ANTHROPIC_AUTH_TOKEN has higher precedence than ANTHROPIC_API_KEY in Claude Code.
       // The proxy replaces this placeholder with the real OAuth token per request.
       ANTHROPIC_AUTH_TOKEN: "proxy-managed",
