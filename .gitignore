@@ -1,6 +1,9 @@
 # Build output
 dist/
 
+# npm pack artifacts
+*.tgz
+
 # Dependencies
 node_modules/
 
