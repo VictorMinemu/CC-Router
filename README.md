@@ -3,8 +3,8 @@
 **Round-robin proxy for multiple Claude Max accounts.**  
 Distribute Claude Code requests across N subscriptions to multiply your throughput.
 
-[![CI](https://github.com/VictorMinemu/cc-router/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorMinemu/cc-router/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/cc-router)](https://www.npmjs.com/package/cc-router)
+[![CI](https://github.com/VictorMinemu/CC-Router/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorMinemu/CC-Router/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/ai-cc-router)](https://www.npmjs.com/package/ai-cc-router)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -198,7 +198,7 @@ cc-router service install
 **Requirements:** Node.js 20 or 22.
 
 ```bash
-npm install -g cc-router
+npm install -g ai-cc-router
 ```
 
 Verify:
@@ -386,7 +386,7 @@ See [docs/security.md](docs/security.md) for details.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Bug reports → [GitHub Issues](https://github.com/VictorMinemu/cc-router/issues)
+Bug reports → [GitHub Issues](https://github.com/VictorMinemu/CC-Router/issues)
 
 ---
 

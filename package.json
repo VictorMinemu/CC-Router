@@ -1,10 +1,10 @@
 {
-  "name": "cc-router",
+  "name": "ai-cc-router",
   "version": "0.1.0",
   "description": "Round-robin proxy for Claude Max OAuth tokens — use multiple Claude Max accounts with Claude Code",
   "type": "module",
   "bin": {
-    "cc-router": "./dist/cli/index.js"
+    "cc-router": "dist/cli/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -26,12 +26,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/VictorMinemu/cc-router.git"
+    "url": "git+https://github.com/VictorMinemu/CC-Router.git"
   },
   "bugs": {
-    "url": "https://github.com/VictorMinemu/cc-router/issues"
+    "url": "https://github.com/VictorMinemu/CC-Router/issues"
   },
-  "homepage": "https://github.com/VictorMinemu/cc-router#readme",
+  "homepage": "https://github.com/VictorMinemu/CC-Router#readme",
   "files": [
     "dist/",
     "litellm-config.yaml",
