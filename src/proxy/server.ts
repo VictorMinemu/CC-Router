@@ -8,6 +8,7 @@ import type { Request } from "express";
 import { TokenPool } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
 import { loadAccounts, accountsFileExists, readAccountsFromPath, readConfig } from "../config/manager.js";
+import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { logRoute, logError, logStartup } from "./logger.js";
 import { stats } from "./stats.js";
 import type { LogEntry } from "./stats.js";
@@ -399,11 +400,36 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 
+  // ─── Auto-update (opt-in via config or CC_ROUTER_AUTO_UPDATE=1) ───────────
+  const autoUpdate = readConfig().autoUpdate || process.env["CC_ROUTER_AUTO_UPDATE"] === "1";
+  if (autoUpdate) {
+    const AUTO_UPDATE_INTERVAL = 6 * 60 * 60 * 1000; // 6 hours
+    const runAutoUpdate = async () => {
+      try {
+        const check = await checkForUpdate();
+        if (!check.updateAvailable || check.diff === "major") return;
+        console.log(chalk.cyan(`[auto-update] v${check.current} → v${check.latest} (${check.diff})`));
+        const ok = await performUpdate(check.latest);
+        if (ok) {
+          console.log(chalk.green("[auto-update] Restarting with new version..."));
+          saveAccounts(pool.getAll());
+          restartSelf();
+        }
+      } catch (err) {
+        console.error(chalk.gray(`[auto-update] Check failed: ${(err as Error).message}`));
+      }
+    };
+    // First check 60s after startup, then every 6h
+    setTimeout(runAutoUpdate, 60_000).unref();
+    setInterval(runAutoUpdate, AUTO_UPDATE_INTERVAL).unref();
+  }
+
   // ─── Start ────────────────────────────────────────────────────────────────
   // HOST env var lets teams bind to 0.0.0.0 for LAN/VPS shared access.
   // Defaults to 127.0.0.1 (localhost-only) for single-user safety.
   const host = process.env["HOST"] ?? "127.0.0.1";
   app.listen(port, host, () => {
     logStartup(port, host, mode, target, accounts.length);
+    if (autoUpdate) console.log(chalk.gray("  Auto-update: enabled (patch/minor)"));
   });
 }

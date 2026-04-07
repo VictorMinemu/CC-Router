@@ -8,6 +8,8 @@ import { registerAccounts } from "./cmd-accounts.js";
 import { registerService } from "./cmd-service.js";
 import { registerConfigure } from "./cmd-configure.js";
 import { registerDocker } from "./cmd-docker.js";
+import { registerUpdate } from "./cmd-update.js";
+import { getCurrentVersion, checkForUpdate, printUpdateBanner } from "../utils/self-update.js";
 
 const program = new Command();
 
@@ -17,7 +19,7 @@ program
     "Round-robin proxy for Claude Max OAuth tokens.\n" +
     "Distributes Claude Code requests across multiple Claude Max accounts."
   )
-  .version("0.1.0")
+  .version(getCurrentVersion())
   .addHelpText("after", `
 Examples:
   $ cc-router setup              # First-time wizard: extract tokens + configure Claude Code
@@ -40,5 +42,16 @@ registerAccounts(program);
 registerService(program);
 registerConfigure(program);
 registerDocker(program);
+registerUpdate(program);
+
+// Background update check — fires on every CLI invocation, uses 6h disk cache
+// so it's essentially free after the first check. Notify on process exit.
+if (!process.env["NO_UPDATE_NOTIFIER"] && !process.env["CI"]) {
+  checkForUpdate().then((check) => {
+    if (check.updateAvailable) {
+      process.on("exit", () => printUpdateBanner(check));
+    }
+  }).catch(() => { /* silent */ });
+}
 
 program.parse();
