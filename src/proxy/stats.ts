@@ -8,10 +8,11 @@ export interface LogEntry {
   durationMs?: number;
   method?: string;
   path?: string;
-  // Cache usage from Anthropic message_start event
+  // Token usage from Anthropic response (message_start + message_delta events)
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
   inputTokens?: number;
+  outputTokens?: number;
 }
 
 const MAX_LOG_ENTRIES = 100;
@@ -23,6 +24,7 @@ class ProxyStats {
   totalCacheReadTokens = 0;
   totalCacheCreationTokens = 0;
   totalInputTokens = 0;
+  totalOutputTokens = 0;
   readonly startTime = Date.now();
   private logs: LogEntry[] = [];
 

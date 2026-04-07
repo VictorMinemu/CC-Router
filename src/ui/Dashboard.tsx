@@ -29,6 +29,7 @@ interface HealthData {
   totalCacheReadTokens: number;
   totalCacheCreationTokens: number;
   totalInputTokens: number;
+  totalOutputTokens: number;
   accounts: AccountStat[];
   recentLogs: LogEntry[];
 }
@@ -172,20 +173,28 @@ function LiveDashboard({ data, port, lastUpdate }: { data: HealthData; port: num
       <Box marginTop={1} />
 
       {/* ── Totals ── */}
-      <Box>
-        <Text bold> TOTALS  </Text>
-        <Text>requests </Text>
-        <Text color="cyan">{data.totalRequests}</Text>
-        <Text color="gray">  ·  </Text>
-        <Text>errors </Text>
-        <Text color={data.totalErrors > 0 ? "red" : "green"}>{data.totalErrors}</Text>
-        <Text color="gray">  ·  </Text>
-        <Text>refreshes </Text>
-        <Text color="yellow">{data.totalRefreshes}</Text>
-        <CacheHealthBadge
-          read={data.totalCacheReadTokens}
-          created={data.totalCacheCreationTokens}
-          input={data.totalInputTokens}
+      <Box flexDirection="column">
+        <Box>
+          <Text bold> TOTALS  </Text>
+          <Text>requests </Text>
+          <Text color="cyan">{data.totalRequests}</Text>
+          <Text color="gray">  ·  </Text>
+          <Text>errors </Text>
+          <Text color={data.totalErrors > 0 ? "red" : "green"}>{data.totalErrors}</Text>
+          <Text color="gray">  ·  </Text>
+          <Text>refreshes </Text>
+          <Text color="yellow">{data.totalRefreshes}</Text>
+          <CacheHealthBadge
+            read={data.totalCacheReadTokens}
+            created={data.totalCacheCreationTokens}
+            input={data.totalInputTokens}
+          />
+        </Box>
+        <TokenSummary
+          cacheRead={data.totalCacheReadTokens}
+          cacheCreated={data.totalCacheCreationTokens}
+          uncached={data.totalInputTokens}
+          output={data.totalOutputTokens}
         />
       </Box>
 
@@ -264,9 +273,10 @@ function LogRow({ log, selected }: { log: LogEntry; selected: boolean }) {
   const bg = selected ? "white" : undefined;
   const fg = (c: string | undefined) => selected ? "black" : c;
 
-  // Per-request cache hit rate
-  const totalTok = (log.cacheReadTokens ?? 0) + (log.cacheCreationTokens ?? 0) + (log.inputTokens ?? 0);
-  const cacheHitPct = totalTok > 0 ? Math.round(((log.cacheReadTokens ?? 0) / totalTok) * 100) : null;
+  // Per-request token stats
+  const inputTok = (log.cacheReadTokens ?? 0) + (log.cacheCreationTokens ?? 0) + (log.inputTokens ?? 0);
+  const outputTok = log.outputTokens ?? 0;
+  const cacheHitPct = inputTok > 0 ? Math.round(((log.cacheReadTokens ?? 0) / inputTok) * 100) : null;
   const cacheColor = cacheHitPct === null ? undefined
     : cacheHitPct >= 70 ? "green"
     : cacheHitPct >= 30 ? "yellow"
@@ -291,6 +301,9 @@ function LogRow({ log, selected }: { log: LogEntry; selected: boolean }) {
       )}
       {cacheHitPct !== null && (
         <Text backgroundColor={bg} color={fg(cacheColor)}> ↑{cacheHitPct}%</Text>
+      )}
+      {(inputTok > 0 || outputTok > 0) && (
+        <Text backgroundColor={bg} color={fg("gray")}> {fmtTok(inputTok)}↑ {fmtTok(outputTok)}↓</Text>
       )}
       {log.details && (
         <Text backgroundColor={bg} color={fg("gray")}>  {log.details}</Text>
@@ -345,6 +358,7 @@ function DetailPanel({ log }: { log: LogEntry }) {
               read={log.cacheReadTokens}
               created={log.cacheCreationTokens ?? 0}
               input={log.inputTokens ?? 0}
+              output={log.outputTokens ?? 0}
             />
           </Box>
         )}
@@ -393,22 +407,51 @@ function CacheHealthBadge({ read, created, input }: { read: number; created: num
 
 // ─── Cache breakdown (per-request detail) ────────────────────────────────────
 
-function CacheBreakdown({ read, created, input }: { read: number; created: number; input: number }) {
-  const total = read + created + input;
-  const hitPct = total > 0 ? (read / total) * 100 : 0;
-  const color = total === 0 ? "gray" : hitPct >= 70 ? "green" : hitPct >= 30 ? "yellow" : "red";
+function CacheBreakdown({ read, created, input, output }: { read: number; created: number; input: number; output: number }) {
+  const totalInput = read + created + input;
+  const hitPct = totalInput > 0 ? (read / totalInput) * 100 : 0;
+  const color = totalInput === 0 ? "gray" : hitPct >= 70 ? "green" : hitPct >= 30 ? "yellow" : "red";
 
   return (
     <>
       <FieldColored
         label="Cache hit"
-        value={total > 0 ? `${fmtTok(read)} tok  (${hitPct.toFixed(1)}%)` : "—"}
+        value={totalInput > 0 ? `${fmtTok(read)} tok  (${hitPct.toFixed(1)}%)` : "—"}
         color={color}
       />
       <Field label="Cache created" value={fmtTok(created) + " tok"} />
       <Field label="Uncached"      value={fmtTok(input) + " tok"} />
-      <Field label="Total input"   value={fmtTok(total) + " tok"} />
+      <Field label="Total input"   value={fmtTok(totalInput) + " tok"} />
+      <Field label="Output"        value={fmtTok(output) + " tok"} />
+      <Field label="Total"         value={fmtTok(totalInput + output) + " tok"} />
     </>
+  );
+}
+
+// ─── Token summary (aggregated totals) ──────────────────────────────────────
+
+function TokenSummary({ cacheRead, cacheCreated, uncached, output }: { cacheRead: number; cacheCreated: number; uncached: number; output: number }) {
+  const totalInput = cacheRead + cacheCreated + uncached;
+  const totalAll = totalInput + output;
+  if (totalAll === 0) return null;
+
+  const hitPct = totalInput > 0 ? (cacheRead / totalInput) * 100 : 0;
+
+  return (
+    <Box paddingLeft={2}>
+      <Text color="gray">input </Text>
+      <Text color="white">{fmtTok(totalInput)}</Text>
+      <Text color="gray"> (cached </Text>
+      <Text color="green">{fmtTok(cacheRead)}</Text>
+      <Text color="gray"> + new </Text>
+      <Text color="yellow">{fmtTok(cacheCreated)}</Text>
+      <Text color="gray"> + uncached </Text>
+      <Text color="white">{fmtTok(uncached)}</Text>
+      <Text color="gray">)  ·  output </Text>
+      <Text color="white">{fmtTok(output)}</Text>
+      <Text color="gray">  ·  total </Text>
+      <Text color="cyan" bold>{fmtTok(totalAll)}</Text>
+    </Box>
   );
 }
 

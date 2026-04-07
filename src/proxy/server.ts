@@ -31,10 +31,10 @@ export interface ServerOptions {
   accountsPath?: string;
 }
 
-// Mutates entry and updates aggregate counters with cache usage from Anthropic's
-// message_start event. Called asynchronously after the log entry is already stored,
+// Mutates entry and updates aggregate counters with token usage from Anthropic's
+// response. Called asynchronously after the log entry is already stored,
 // so the dashboard picks up the values on the next poll.
-function applyCacheUsage(entry: LogEntry, usage: Record<string, number>): void {
+function applyInputUsage(entry: LogEntry, usage: Record<string, number>): void {
   entry.cacheReadTokens = usage["cache_read_input_tokens"] ?? 0;
   entry.cacheCreationTokens = usage["cache_creation_input_tokens"] ?? 0;
   entry.inputTokens = usage["input_tokens"] ?? 0;
@@ -42,6 +42,11 @@ function applyCacheUsage(entry: LogEntry, usage: Record<string, number>): void {
   stats.totalCacheReadTokens += entry.cacheReadTokens;
   stats.totalCacheCreationTokens += entry.cacheCreationTokens;
   stats.totalInputTokens += entry.inputTokens;
+}
+
+function applyOutputUsage(entry: LogEntry, usage: Record<string, number>): void {
+  entry.outputTokens = usage["output_tokens"] ?? 0;
+  stats.totalOutputTokens += entry.outputTokens;
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
@@ -114,6 +119,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       totalCacheReadTokens: stats.totalCacheReadTokens,
       totalCacheCreationTokens: stats.totalCacheCreationTokens,
       totalInputTokens: stats.totalInputTokens,
+      totalOutputTokens: stats.totalOutputTokens,
       accounts: pool.getStats(),
       recentLogs: stats.getRecentLogs(50),
     });
@@ -222,49 +228,61 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         const entry = pendingLog as LogEntry;
         stats.addLog(entry);
 
-        // ── Capture cache usage from Anthropic response body ──────────────────
-        // The message_start SSE event (or JSON body) carries usage fields:
-        //   cache_read_input_tokens, cache_creation_input_tokens, input_tokens
-        // We add a passive data listener to capture these without breaking the
-        // streaming passthrough — all data listeners share the same chunks.
+        // ── Capture token usage from Anthropic response body ─────────────────
+        // SSE streams carry usage across two events:
+        //   message_start  → input_tokens, cache_read/creation_input_tokens
+        //   message_delta   → output_tokens
+        // Non-streaming JSON carries all fields in a single usage object.
+        // We use incremental line parsing (not buffering) so we can capture
+        // both events without holding the full stream in memory.
         const contentType = String(proxyRes.headers["content-type"] ?? "");
         const encoding = String(proxyRes.headers["content-encoding"] ?? "");
         const isCompressed = /gzip|br|deflate/.test(encoding);
 
         if (!isCompressed && (contentType.includes("text/event-stream") || contentType.includes("application/json"))) {
           const isSSE = contentType.includes("text/event-stream");
-          const MAX_BUF = 8 * 1024;
-          let buf = "";
-          let captured = false;
 
-          proxyRes.on("data", (chunk: Buffer) => {
-            if (captured || buf.length >= MAX_BUF) return;
-            buf += chunk.toString("utf8");
+          if (isSSE) {
+            let lineBuf = "";
+            let gotInput = false;
+            let gotOutput = false;
 
-            if (isSSE) {
-              // message_start is always the first SSE event — parse as soon as we have it
-              const lines = buf.split("\n");
+            proxyRes.on("data", (chunk: Buffer) => {
+              if (gotInput && gotOutput) return;
+              lineBuf += chunk.toString("utf8");
+              const lines = lineBuf.split("\n");
+              lineBuf = lines.pop() ?? ""; // keep incomplete last line
+
               for (const line of lines) {
                 if (!line.startsWith("data: ")) continue;
                 try {
-                  const evt = JSON.parse(line.slice(6)) as { type?: string; message?: { usage?: Record<string, number> } };
-                  if (evt.type === "message_start" && evt.message?.usage) {
-                    applyCacheUsage(entry, evt.message.usage);
-                    captured = true;
-                    break;
+                  const evt = JSON.parse(line.slice(6)) as {
+                    type?: string;
+                    message?: { usage?: Record<string, number> };
+                    usage?: Record<string, number>;
+                  };
+                  if (!gotInput && evt.type === "message_start" && evt.message?.usage) {
+                    applyInputUsage(entry, evt.message.usage);
+                    gotInput = true;
                   }
-                } catch { /* partial JSON, wait for next chunk */ }
+                  if (!gotOutput && evt.type === "message_delta" && evt.usage) {
+                    applyOutputUsage(entry, evt.usage);
+                    gotOutput = true;
+                  }
+                } catch { /* partial JSON across chunk boundary — next chunk will complete it */ }
               }
-            }
-          });
-
-          if (!isSSE) {
-            // Non-streaming: parse full JSON body on 'end'
+            });
+          } else {
+            // Non-streaming JSON: buffer full body then parse once
+            let buf = "";
+            proxyRes.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
             proxyRes.on("end", () => {
-              if (captured) return;
               try {
                 const body = JSON.parse(buf) as { usage?: Record<string, number> };
-                if (body.usage) applyCacheUsage(entry, body.usage);
+                if (body.usage) {
+                  applyInputUsage(entry, body.usage);
+                  applyOutputUsage(entry, body.usage);
+                }
               } catch { /* ignore */ }
             });
           }
