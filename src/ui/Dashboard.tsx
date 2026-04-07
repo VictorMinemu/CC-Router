@@ -28,8 +28,14 @@ interface AccountStat {
   expiresInMs: number;
   lastUsedMs: number;
   lastRefreshMs: number;
-  rateLimits: AccountRateLimitsView;
+  rateLimits?: AccountRateLimitsView;
 }
+
+const EMPTY_RL: AccountRateLimitsView = {
+  status: "unknown", fiveHourUtil: 0, fiveHourReset: 0,
+  sevenDayUtil: 0, sevenDayReset: 0, claim: "", plan: "",
+  requestsLimit: 0, lastUpdated: 0,
+};
 
 interface HealthData {
   status: "ok" | "degraded";
@@ -42,7 +48,7 @@ interface HealthData {
   totalCacheReadTokens: number;
   totalCacheCreationTokens: number;
   totalInputTokens: number;
-  totalOutputTokens: number;
+  totalOutputTokens?: number;
   accounts: AccountStat[];
   recentLogs: LogEntry[];
 }
@@ -207,7 +213,7 @@ function LiveDashboard({ data, port, lastUpdate }: { data: HealthData; port: num
           cacheRead={data.totalCacheReadTokens}
           cacheCreated={data.totalCacheCreationTokens}
           uncached={data.totalInputTokens}
-          output={data.totalOutputTokens}
+          output={data.totalOutputTokens ?? 0}
         />
       </Box>
 
@@ -241,7 +247,7 @@ function LiveDashboard({ data, port, lastUpdate }: { data: HealthData; port: num
 // ─── Account row (two-line: status + utilization bars) ───────────────────────
 
 function AccountRow({ account: a }: { account: AccountStat }) {
-  const rl = a.rateLimits;
+  const rl = a.rateLimits ?? EMPTY_RL;
   const isLimited = rl.status === "rate_limited";
 
   const dot = isLimited ? "⊘" : a.busy ? "◌" : a.healthy ? "●" : "●";
