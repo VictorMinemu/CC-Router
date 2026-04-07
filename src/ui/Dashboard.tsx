@@ -26,6 +26,9 @@ interface HealthData {
   totalRequests: number;
   totalErrors: number;
   totalRefreshes: number;
+  totalCacheReadTokens: number;
+  totalCacheCreationTokens: number;
+  totalInputTokens: number;
   accounts: AccountStat[];
   recentLogs: LogEntry[];
 }
@@ -179,6 +182,11 @@ function LiveDashboard({ data, port, lastUpdate }: { data: HealthData; port: num
         <Text color="gray">  ·  </Text>
         <Text>refreshes </Text>
         <Text color="yellow">{data.totalRefreshes}</Text>
+        <CacheHealthBadge
+          read={data.totalCacheReadTokens}
+          created={data.totalCacheCreationTokens}
+          input={data.totalInputTokens}
+        />
       </Box>
 
       <Box marginTop={1} />
@@ -256,6 +264,14 @@ function LogRow({ log, selected }: { log: LogEntry; selected: boolean }) {
   const bg = selected ? "white" : undefined;
   const fg = (c: string | undefined) => selected ? "black" : c;
 
+  // Per-request cache hit rate
+  const totalTok = (log.cacheReadTokens ?? 0) + (log.cacheCreationTokens ?? 0) + (log.inputTokens ?? 0);
+  const cacheHitPct = totalTok > 0 ? Math.round(((log.cacheReadTokens ?? 0) / totalTok) * 100) : null;
+  const cacheColor = cacheHitPct === null ? undefined
+    : cacheHitPct >= 70 ? "green"
+    : cacheHitPct >= 30 ? "yellow"
+    : "red";
+
   return (
     <Box>
       <Text backgroundColor={bg} color={fg(undefined)}>
@@ -272,6 +288,9 @@ function LogRow({ log, selected }: { log: LogEntry; selected: boolean }) {
       )}
       {log.durationMs !== undefined && (
         <Text backgroundColor={bg} color={fg("gray")}> {log.durationMs}ms</Text>
+      )}
+      {cacheHitPct !== null && (
+        <Text backgroundColor={bg} color={fg(cacheColor)}> ↑{cacheHitPct}%</Text>
       )}
       {log.details && (
         <Text backgroundColor={bg} color={fg("gray")}>  {log.details}</Text>
@@ -320,6 +339,15 @@ function DetailPanel({ log }: { log: LogEntry }) {
             <Field label="Details" value={log.details} />
           </Box>
         )}
+        {log.cacheReadTokens !== undefined && (
+          <Box gap={2}>
+            <CacheBreakdown
+              read={log.cacheReadTokens}
+              created={log.cacheCreationTokens ?? 0}
+              input={log.inputTokens ?? 0}
+            />
+          </Box>
+        )}
       </Box>
     </Box>
   );
@@ -341,6 +369,53 @@ function FieldColored({ label, value, color }: { label: string; value: string; c
       <Text color={color}>{value}</Text>
     </Box>
   );
+}
+
+// ─── Cache health badge (aggregated) ─────────────────────────────────────────
+
+function CacheHealthBadge({ read, created, input }: { read: number; created: number; input: number }) {
+  const total = read + created + input;
+  if (total === 0) return null;
+
+  const hitPct = Math.round((read / total) * 100);
+  const color = hitPct >= 70 ? "green" : hitPct >= 30 ? "yellow" : "red";
+  const label = hitPct >= 70 ? "healthy" : hitPct >= 30 ? "fair" : "poor";
+
+  return (
+    <>
+      <Text color="gray">  ·  </Text>
+      <Text>cache </Text>
+      <Text color={color}>{hitPct}% hit </Text>
+      <Text color="gray">({label})</Text>
+    </>
+  );
+}
+
+// ─── Cache breakdown (per-request detail) ────────────────────────────────────
+
+function CacheBreakdown({ read, created, input }: { read: number; created: number; input: number }) {
+  const total = read + created + input;
+  const hitPct = total > 0 ? (read / total) * 100 : 0;
+  const color = total === 0 ? "gray" : hitPct >= 70 ? "green" : hitPct >= 30 ? "yellow" : "red";
+
+  return (
+    <>
+      <FieldColored
+        label="Cache hit"
+        value={total > 0 ? `${fmtTok(read)} tok  (${hitPct.toFixed(1)}%)` : "—"}
+        color={color}
+      />
+      <Field label="Cache created" value={fmtTok(created) + " tok"} />
+      <Field label="Uncached"      value={fmtTok(input) + " tok"} />
+      <Field label="Total input"   value={fmtTok(total) + " tok"} />
+    </>
+  );
+}
+
+function fmtTok(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
 }
 
 // ─── HTTP status text ─────────────────────────────────────────────────────────

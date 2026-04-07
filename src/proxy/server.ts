@@ -31,6 +31,19 @@ export interface ServerOptions {
   accountsPath?: string;
 }
 
+// Mutates entry and updates aggregate counters with cache usage from Anthropic's
+// message_start event. Called asynchronously after the log entry is already stored,
+// so the dashboard picks up the values on the next poll.
+function applyCacheUsage(entry: LogEntry, usage: Record<string, number>): void {
+  entry.cacheReadTokens = usage["cache_read_input_tokens"] ?? 0;
+  entry.cacheCreationTokens = usage["cache_creation_input_tokens"] ?? 0;
+  entry.inputTokens = usage["input_tokens"] ?? 0;
+
+  stats.totalCacheReadTokens += entry.cacheReadTokens;
+  stats.totalCacheCreationTokens += entry.cacheCreationTokens;
+  stats.totalInputTokens += entry.inputTokens;
+}
+
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const port = opts.port ?? PROXY_PORT;
 
@@ -98,6 +111,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       totalRequests: stats.totalRequests,
       totalErrors: stats.totalErrors,
       totalRefreshes: stats.totalRefreshes,
+      totalCacheReadTokens: stats.totalCacheReadTokens,
+      totalCacheCreationTokens: stats.totalCacheCreationTokens,
+      totalInputTokens: stats.totalInputTokens,
       accounts: pool.getStats(),
       recentLogs: stats.getRecentLogs(50),
     });
@@ -203,7 +219,56 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           setTimeout(() => { account.busy = false; }, 30_000);
         }
 
-        stats.addLog(pendingLog as LogEntry);
+        const entry = pendingLog as LogEntry;
+        stats.addLog(entry);
+
+        // ── Capture cache usage from Anthropic response body ──────────────────
+        // The message_start SSE event (or JSON body) carries usage fields:
+        //   cache_read_input_tokens, cache_creation_input_tokens, input_tokens
+        // We add a passive data listener to capture these without breaking the
+        // streaming passthrough — all data listeners share the same chunks.
+        const contentType = String(proxyRes.headers["content-type"] ?? "");
+        const encoding = String(proxyRes.headers["content-encoding"] ?? "");
+        const isCompressed = /gzip|br|deflate/.test(encoding);
+
+        if (!isCompressed && (contentType.includes("text/event-stream") || contentType.includes("application/json"))) {
+          const isSSE = contentType.includes("text/event-stream");
+          const MAX_BUF = 8 * 1024;
+          let buf = "";
+          let captured = false;
+
+          proxyRes.on("data", (chunk: Buffer) => {
+            if (captured || buf.length >= MAX_BUF) return;
+            buf += chunk.toString("utf8");
+
+            if (isSSE) {
+              // message_start is always the first SSE event — parse as soon as we have it
+              const lines = buf.split("\n");
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                try {
+                  const evt = JSON.parse(line.slice(6)) as { type?: string; message?: { usage?: Record<string, number> } };
+                  if (evt.type === "message_start" && evt.message?.usage) {
+                    applyCacheUsage(entry, evt.message.usage);
+                    captured = true;
+                    break;
+                  }
+                } catch { /* partial JSON, wait for next chunk */ }
+              }
+            }
+          });
+
+          if (!isSSE) {
+            // Non-streaming: parse full JSON body on 'end'
+            proxyRes.on("end", () => {
+              if (captured) return;
+              try {
+                const body = JSON.parse(buf) as { usage?: Record<string, number> };
+                if (body.usage) applyCacheUsage(entry, body.usage);
+              } catch { /* ignore */ }
+            });
+          }
+        }
       },
 
       error: (err: Error, _req: IncomingMessage, res: ServerResponse | Socket) => {
