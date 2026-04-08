@@ -66,6 +66,72 @@ export async function checkMitmproxyInstalled(): Promise<boolean> {
   }
 }
 
+// ─── Network Extension status (macOS) ────────────────────────────────────────
+
+/**
+ * Status of mitmproxy's macOS Network Extension.
+ *   "enabled"       — ready to use
+ *   "waiting"       — installed but not approved by the user yet
+ *   "not_installed" — mitmdump has never been run, or the extension was removed
+ *   "unknown"       — we couldn't query systemextensionsctl
+ */
+export type NetworkExtensionStatus = "enabled" | "waiting" | "not_installed" | "unknown";
+
+/**
+ * Check the approval status of the mitmproxy macOS Network Extension.
+ * No-op on Windows/Linux (returns "enabled").
+ *
+ * Parses `systemextensionsctl list` output, looking for the mitmproxy entry.
+ * Status comes from the flags column:
+ *   "* *"   → enabled + active
+ *   "  *"   → active but waiting for user approval
+ */
+export async function getNetworkExtensionStatus(): Promise<NetworkExtensionStatus> {
+  if (!isMacos()) return "enabled"; // Only macOS needs this check
+
+  try {
+    const { stdout } = await execFileP("systemextensionsctl", ["list"]);
+    const mitmLine = stdout
+      .split("\n")
+      .find((l) => l.toLowerCase().includes("mitmproxy"));
+
+    if (!mitmLine) return "not_installed";
+
+    // systemextensionsctl flags are the first two columns; "*" means set.
+    // Order is "enabled active" — both must be "*" for the extension to work.
+    // Example strings seen in the wild:
+    //   "*\t*\tS8XHQB96PW\torg.mitmproxy.macos-redirector..." → enabled
+    //   "\t*\tS8XHQB96PW\torg.mitmproxy.macos-redirector..."  → waiting
+    //
+    // We also accept the human-readable "[activated enabled]" / "[activated waiting for user]"
+    // suffix that newer macOS versions append.
+    if (mitmLine.includes("[activated enabled]")) return "enabled";
+    if (mitmLine.includes("waiting for user")) return "waiting";
+
+    const cols = mitmLine.split("\t").map((s) => s.trim());
+    const enabled = cols[0] === "*";
+    const active = cols[1] === "*";
+    if (enabled && active) return "enabled";
+    if (!enabled && active) return "waiting";
+    return "not_installed";
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Open the macOS "Login Items & Extensions" settings pane. Best-effort. */
+export async function openNetworkExtensionSettings(): Promise<void> {
+  if (!isMacos()) return;
+  try {
+    // The x-apple.systempreferences URL opens the right pane in System Settings.
+    // Extensions pane is not directly deep-linkable, so we open the closest one.
+    await execFileP("open", ["x-apple.systempreferences:com.apple.LoginItems-Settings.extension"]);
+  } catch {
+    // If that fails, fall back to opening plain System Settings
+    await execFileP("open", ["/System/Applications/System Settings.app"]).catch(() => {});
+  }
+}
+
 // ─── CA certificate ───────────────────────────────────────────────────────────
 
 export function isCaCertInstalled(): boolean {
@@ -173,6 +239,29 @@ def request(flow: http.HTTPFlow) -> None:
  * api.anthropic.com traffic to CC-Router via the addon script.
  */
 export async function startInterceptor(target: string): Promise<void> {
+  // On macOS, verify the Network Extension is enabled before attempting to start.
+  // If it's "waiting", mitmdump starts silently but captures zero traffic.
+  if (isMacos()) {
+    const status = await getNetworkExtensionStatus();
+    if (status === "waiting") {
+      throw new Error(
+        "Mitmproxy Network Extension is installed but not yet approved.\n" +
+        "  Open: System Settings → General → Login Items & Extensions → Network Extensions\n" +
+        '  Toggle "Mitmproxy Redirector" ON and enter your admin password.\n' +
+        "  Then re-run this command."
+      );
+    }
+    if (status === "not_installed") {
+      throw new Error(
+        "Mitmproxy Network Extension is not installed.\n" +
+        "  Run mitmdump once manually to trigger the installation:\n" +
+        '    mitmdump --mode "local:Claude" --set connection_strategy=lazy\n' +
+        "  macOS will prompt you to approve it in System Settings.\n" +
+        "  Then re-run this command."
+      );
+    }
+  }
+
   // Ensure addon exists
   if (!existsSync(ADDON_PATH)) writeAddonScript(target);
 

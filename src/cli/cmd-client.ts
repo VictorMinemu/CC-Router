@@ -15,6 +15,8 @@ import {
   stopInterceptor,
   isInterceptorRunning,
   getProcessName,
+  getNetworkExtensionStatus,
+  openNetworkExtensionSettings,
 } from "../interceptor/mitmproxy-manager.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -154,11 +156,15 @@ export function registerClient(program: Command): void {
       console.log(chalk.green("✓ Claude Code configured to route through CC-Router"));
       console.log(chalk.gray(`  ANTHROPIC_BASE_URL → ${url}`));
 
-      // 6. Optionally configure Claude Desktop
-      const wantsDesktop = opts?.desktop ?? (
-        isClaudeDesktopInstalled() &&
-        await confirm({ message: "Also route Claude Desktop (chat + Cowork) through the proxy?", default: false })
-      );
+      // 6. Optionally configure Claude Desktop (Cowork / Agent mode only)
+      let wantsDesktop = opts?.desktop ?? false;
+      if (!opts?.desktop && isClaudeDesktopInstalled()) {
+        printDesktopSupportExplainer();
+        wantsDesktop = await confirm({
+          message: "Route Claude Desktop's Cowork / Agent-mode traffic through CC-Router?",
+          default: false,
+        });
+      }
 
       if (wantsDesktop) {
         await setupDesktopInterception(url);
@@ -276,15 +282,30 @@ export function registerClient(program: Command): void {
       }
 
       // ── Desktop status ─────────────────────────────────────────────────
-      console.log(chalk.bold("\n  DESKTOP INTERCEPTOR"));
+      console.log(chalk.bold("\n  DESKTOP INTERCEPTOR  (Cowork / Agent mode)"));
       if (cfg.client.desktopEnabled) {
         const running = await isInterceptorRunning();
-        console.log(`    ${running ? chalk.green("● running") : chalk.yellow("○ configured but stopped")}`);
-        if (!running) {
+        if (running) {
+          console.log(`    ${chalk.green("● running")}`);
+        } else {
+          console.log(`    ${chalk.yellow("○ configured but stopped")}`);
           console.log(chalk.gray("    Start with: cc-router client start-desktop"));
         }
+        // Check Network Extension on macOS
+        if (isMacos()) {
+          const extStatus = await getNetworkExtensionStatus();
+          if (extStatus === "waiting") {
+            console.log(chalk.red("    ⚠  Network Extension NOT approved — interceptor won't capture traffic!"));
+            console.log(chalk.gray("    Fix: System Settings → General → Login Items & Extensions → Network Extensions"));
+          } else if (extStatus === "not_installed") {
+            console.log(chalk.yellow("    ⚠  Network Extension not installed — will be triggered on first start"));
+          } else if (extStatus === "enabled") {
+            console.log(`    ${chalk.green("✓")} ${chalk.gray("Network Extension: enabled")}`);
+          }
+        }
+        console.log(chalk.gray("    Scope: /v1/messages + /v1/models  (normal chat NOT routed)"));
       } else {
-        console.log(`    ${chalk.gray("not configured")}`);
+        console.log(`    ${chalk.gray("not configured — enable with: cc-router client connect --desktop")}`);
       }
 
       console.log();
@@ -294,7 +315,7 @@ export function registerClient(program: Command): void {
   // ── cc-router client start-desktop ──────────────────────────────────────────
   client
     .command("start-desktop")
-    .description("Start mitmproxy interceptor for Claude Desktop")
+    .description("Start mitmproxy interceptor for Claude Desktop (Cowork / Agent mode)")
     .action(async () => {
       const cfg = readConfig();
       if (!cfg.client) {
@@ -302,9 +323,10 @@ export function registerClient(program: Command): void {
         process.exit(1);
       }
 
-      if (!await checkMitmproxyInstalled()) {
-        console.error(chalk.red("mitmproxy not found. Install it first:"));
-        console.error(chalk.yellow(isMacos() ? "  brew install mitmproxy" : "  pip install mitmproxy"));
+      if (!(await checkMitmproxyInstalled())) {
+        console.error(chalk.red("\n✗ mitmproxy not found. Install it first:"));
+        console.error(chalk.cyan(isMacos() ? "    brew install mitmproxy" : "    pip install mitmproxy"));
+        console.error();
         process.exit(1);
       }
 
@@ -314,15 +336,53 @@ export function registerClient(program: Command): void {
         writeConfig(cfg);
       }
 
+      // Pre-flight check: verify Network Extension is ready on macOS.
+      // startInterceptor does the same check and throws; we catch and show
+      // a friendlier block here with the open-settings shortcut.
+      if (isMacos()) {
+        const status = await getNetworkExtensionStatus();
+        if (status === "waiting") {
+          console.error(chalk.red("\n✗ Mitmproxy Network Extension is NOT yet approved.\n"));
+          printNetworkExtensionInstructions();
+          const openNow = await confirm({
+            message: "Open System Settings now?",
+            default: true,
+          });
+          if (openNow) await openNetworkExtensionSettings();
+          console.error(chalk.yellow("\n  Re-run `cc-router client start-desktop` after approving.\n"));
+          process.exit(1);
+        }
+        if (status === "not_installed") {
+          console.error(chalk.yellow("\n⚠  Mitmproxy Network Extension is not installed yet."));
+          console.error(chalk.gray("  The first mitmdump run will trigger installation."));
+          console.error(chalk.gray("  Approve it in System Settings when macOS prompts you, then re-run this command.\n"));
+        }
+      }
+
       const target = cfg.client.remoteUrl;
       const processName = getProcessName();
       console.log(chalk.cyan(`\nStarting mitmproxy interceptor for "${processName}"...`));
-      console.log(chalk.gray(`  Redirecting api.anthropic.com → ${target}\n`));
+      console.log(chalk.gray(`  Redirecting api.anthropic.com/v1/messages → ${target}`));
 
-      await startInterceptor(target);
+      try {
+        await startInterceptor(target);
+      } catch (e) {
+        console.error(chalk.red(`\n✗ Failed to start interceptor:\n`));
+        console.error(chalk.yellow("  " + (e as Error).message.split("\n").join("\n  ")));
+        console.error();
+        process.exit(1);
+      }
 
-      console.log(chalk.green("✓ Claude Desktop interceptor running"));
-      console.log(chalk.gray("  Open Claude Desktop and send a message to test.\n"));
+      console.log(chalk.green("\n✓ Claude Desktop interceptor running"));
+      console.log();
+      console.log(chalk.bold.yellow("  Next steps:"));
+      console.log("    " + chalk.cyan("1.") + " Quit Claude Desktop completely (⌘Q)");
+      console.log("    " + chalk.cyan("2.") + " Reopen Claude Desktop");
+      console.log("    " + chalk.cyan("3.") + " Use Cowork / Agent mode (Claude Code in Desktop)");
+      console.log();
+      console.log(chalk.gray("  Check routing with:  ") + chalk.cyan("cc-router client status"));
+      console.log(chalk.gray("  Stop interceptor:    ") + chalk.cyan("cc-router client stop-desktop"));
+      console.log();
     });
 
   // ── cc-router client stop-desktop ───────────────────────────────────────────
@@ -337,44 +397,113 @@ export function registerClient(program: Command): void {
 
 // ─── Desktop setup flow ───────────────────────────────────────────────────────
 
+/**
+ * Printed before asking the user whether to enable Desktop interception.
+ * The copy is deliberately explicit about WHAT works and WHAT doesn't — users
+ * who expect the normal chat to go through CC-Router will hit confusion fast,
+ * and we can head it off here by framing this as a "Cowork / Agent mode" feature.
+ */
+export function printDesktopSupportExplainer(): void {
+  console.log(chalk.bold.cyan("\n  🖥  Claude Desktop — what CC-Router can route\n"));
+  console.log(
+    "  Claude Desktop does NOT expose ANTHROPIC_BASE_URL, so CC-Router uses\n" +
+    "  mitmproxy to selectively intercept only the traffic it can handle:\n"
+  );
+  console.log(chalk.green("  ✓ Cowork / Agent mode       ") + chalk.gray("— /v1/messages (this is what gets routed)"));
+  console.log(chalk.green("  ✓ Claude Code inside Desktop") + chalk.gray("— /v1/messages (same as CLI)"));
+  console.log(chalk.red("  ✗ Normal chat               ") + chalk.gray("— goes to claude.ai webview, NOT redirectable"));
+  console.log();
+  console.log(chalk.gray(
+    "  TL;DR: Your LLM-heavy workflows (Cowork, agent tasks, in-Desktop\n" +
+    "  Claude Code) will rotate across your Max accounts via CC-Router.\n" +
+    "  The regular chat sidebar keeps going directly through claude.ai."
+  ));
+  console.log();
+}
+
+/**
+ * Prints the macOS Network Extension approval walkthrough.
+ * This is the #1 gotcha — mitmdump starts silently but captures nothing
+ * until the user flips the toggle in System Settings.
+ */
+export function printNetworkExtensionInstructions(): void {
+  if (!isMacos()) return;
+  console.log(chalk.bold.yellow("\n  ⚠  IMPORTANT — macOS Network Extension approval\n"));
+  console.log("  The first time mitmproxy runs in local mode, macOS installs a");
+  console.log("  Network Extension (" + chalk.cyan("Mitmproxy Redirector") + ") that must be approved");
+  console.log("  manually. " + chalk.red("Without this step, mitmproxy captures ZERO traffic.") + "\n");
+  console.log(chalk.bold("  Steps:"));
+  console.log("    " + chalk.cyan("1.") + " Open " + chalk.bold("System Settings"));
+  console.log("    " + chalk.cyan("2.") + " Go to " + chalk.bold("General → Login Items & Extensions"));
+  console.log("    " + chalk.cyan("3.") + " Scroll to " + chalk.bold("Network Extensions") + " and click the " + chalk.bold("ⓘ") + " button");
+  console.log("    " + chalk.cyan("4.") + " Toggle " + chalk.bold("Mitmproxy Redirector") + " ON");
+  console.log("    " + chalk.cyan("5.") + " Enter your Mac admin password when prompted\n");
+  console.log(chalk.gray("  You only need to do this ONCE per machine.\n"));
+}
+
 async function setupDesktopInterception(target: string): Promise<void> {
   console.log(chalk.bold("\n🖥  Claude Desktop Setup\n"));
 
+  // 0. Explain what actually works before anything else
+  printDesktopSupportExplainer();
+  const proceedWithSetup = await confirm({
+    message: "Continue with Cowork / Agent-mode interception setup?",
+    default: true,
+  });
+  if (!proceedWithSetup) {
+    console.log(chalk.gray("Skipping Desktop setup. You can run it later with: cc-router client start-desktop\n"));
+    return;
+  }
+
   // 1. Check mitmproxy
-  if (!await checkMitmproxyInstalled()) {
-    console.log(chalk.yellow("mitmproxy is required but not installed."));
+  if (!(await checkMitmproxyInstalled())) {
+    console.log(chalk.yellow("\nmitmproxy is required but not installed."));
     if (isMacos()) {
-      console.log(chalk.cyan("  Install: brew install mitmproxy"));
+      console.log(chalk.cyan("  Install:  brew install mitmproxy"));
     } else if (isWindows()) {
-      console.log(chalk.cyan("  Install: pip install mitmproxy"));
+      console.log(chalk.cyan("  Install:  pip install mitmproxy  (or download the installer from mitmproxy.org)"));
     } else {
-      console.log(chalk.cyan("  Install: pip install mitmproxy (requires kernel ≥ 6.8)"));
+      console.log(chalk.cyan("  Install:  pip install mitmproxy  (Linux local mode requires kernel ≥ 6.8)"));
     }
     console.log();
-    const proceed = await confirm({ message: "Have you installed mitmproxy?", default: false });
-    if (!proceed || !await checkMitmproxyInstalled()) {
-      console.log(chalk.red("mitmproxy not found. Skipping Desktop setup.\n"));
+    const proceed = await confirm({ message: "Have you installed mitmproxy now?", default: false });
+    if (!proceed || !(await checkMitmproxyInstalled())) {
+      console.log(chalk.red("\nmitmproxy still not found. Skipping Desktop setup.\n"));
+      console.log(chalk.gray("Re-run later with:  cc-router client start-desktop\n"));
       return;
     }
   }
   console.log(chalk.green("✓ mitmproxy found"));
 
-  // 2. Generate CA cert if needed
+  // 2. Generate CA cert if missing
   if (!isCaCertInstalled()) {
-    console.log(chalk.gray("Generating mitmproxy CA certificate..."));
-    await generateCaCert();
+    console.log(chalk.gray("Generating mitmproxy CA certificate (one-time)..."));
+    try {
+      await generateCaCert();
+      console.log(chalk.green("✓ CA certificate generated"));
+    } catch (e) {
+      console.log(chalk.red(`✗ CA generation failed: ${(e as Error).message}`));
+      return;
+    }
+  } else {
+    console.log(chalk.green("✓ CA certificate already present"));
   }
 
   // 3. Install CA cert (requires sudo)
-  console.log(chalk.yellow("\nInstalling the mitmproxy CA certificate requires admin access."));
-  console.log(chalk.gray("This is needed so Claude Desktop trusts the local interceptor."));
-  const installCa = await confirm({ message: "Install CA certificate now? (requires password)", default: true });
+  console.log();
+  console.log(chalk.yellow("The mitmproxy CA certificate must be trusted by your OS so that"));
+  console.log(chalk.yellow("Claude Desktop accepts the local interceptor. This requires sudo."));
+  const installCa = await confirm({ message: "Install CA certificate now? (asks for admin password)", default: true });
   if (installCa) {
     const ok = await installCaCert();
     if (ok) {
-      console.log(chalk.green("✓ CA certificate installed"));
+      console.log(chalk.green("✓ CA certificate installed in system trust store"));
     } else {
-      console.log(chalk.red("✗ CA certificate install failed. You may need to install it manually."));
+      console.log(chalk.red("✗ CA certificate install failed."));
+      console.log(chalk.gray("  Install manually later with:"));
+      console.log(chalk.gray("    sudo security add-trusted-cert -d -r trustRoot \\"));
+      console.log(chalk.gray("      -k /Library/Keychains/System.keychain \\"));
+      console.log(chalk.gray("      ~/.mitmproxy/mitmproxy-ca-cert.pem"));
     }
   }
 
@@ -382,10 +511,48 @@ async function setupDesktopInterception(target: string): Promise<void> {
   writeAddonScript(target);
   console.log(chalk.green("✓ Redirect addon configured"));
 
-  // 5. macOS Network Extension note
+  // 5. macOS Network Extension — THIS is the step people miss
   if (isMacos()) {
-    console.log(chalk.yellow("\n⚠  On first run, macOS will ask to approve mitmproxy's Network Extension."));
-    console.log(chalk.gray("   Go to System Settings → General → Login Items & Extensions → Network Extensions"));
-    console.log(chalk.gray("   and toggle 'Mitmproxy Redirector' on.\n"));
+    printNetworkExtensionInstructions();
+
+    // Check current status and guide the user if it's not enabled
+    const status = await getNetworkExtensionStatus();
+
+    if (status === "not_installed") {
+      console.log(chalk.gray(
+        "  The Network Extension hasn't been installed yet — it'll be triggered\n" +
+        "  automatically the first time you run `cc-router client start-desktop`.\n" +
+        "  macOS will show a popup — approve it and follow the steps above.\n"
+      ));
+    } else if (status === "waiting") {
+      console.log(chalk.red("  ⚠  Network Extension is installed but NOT yet approved.\n"));
+      const openNow = await confirm({
+        message: "Open System Settings now so you can approve it?",
+        default: true,
+      });
+      if (openNow) {
+        await openNetworkExtensionSettings();
+        console.log(chalk.gray("\n  System Settings should now be open."));
+        console.log(chalk.gray("  Toggle 'Mitmproxy Redirector' ON, then come back here.\n"));
+        await confirm({ message: "Done? Press Enter when the toggle is ON", default: true });
+        const newStatus = await getNetworkExtensionStatus();
+        if (newStatus === "enabled") {
+          console.log(chalk.green("✓ Network Extension is enabled"));
+        } else {
+          console.log(chalk.yellow(`  Still not enabled (status: ${newStatus})`));
+          console.log(chalk.gray("  You can re-check later with: cc-router client status"));
+        }
+      }
+    } else if (status === "enabled") {
+      console.log(chalk.green("  ✓ Network Extension is already enabled — you're all set"));
+    }
   }
+
+  // 6. Remind that Claude Desktop must be restarted for mitmproxy to hook into it
+  console.log();
+  console.log(chalk.bold.yellow("  One more thing:"));
+  console.log(chalk.gray("  After starting the interceptor, you must " + chalk.bold("quit and relaunch Claude Desktop") ));
+  console.log(chalk.gray("  (⌘Q in Claude Desktop, then reopen it). mitmproxy only captures"));
+  console.log(chalk.gray("  traffic from processes started AFTER it begins listening."));
+  console.log();
 }
