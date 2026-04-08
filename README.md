@@ -17,11 +17,12 @@ Distribute Claude Code requests across N subscriptions to multiply your throughp
 ## How it works
 
 ```
-Claude Code  (terminal)
-     │
-     │  ANTHROPIC_BASE_URL=http://localhost:3456
-     │  ANTHROPIC_AUTH_TOKEN=proxy-managed
-     ▼
+Claude Code  (terminal)  ─┐
+                          │  ANTHROPIC_BASE_URL=http://localhost:3456
+                          │
+Claude Desktop  ─[mitmproxy]─┐  (optional — intercepts api.anthropic.com)
+                             │
+                             ▼
 ┌─────────────────────────────────────┐
 │  CC-Router  :3456                   │
 │                                     │
@@ -40,6 +41,8 @@ Claude Code  (terminal)
 ```
 
 All standard Claude Code features work transparently: streaming, extended thinking, tool use, prompt caching.
+
+**Claude Desktop support** is opt-in and requires a small interceptor (mitmproxy) because Claude Desktop doesn't expose a custom API endpoint setting. See [Claude Desktop support](#claude-desktop-support).
 
 ---
 
@@ -280,6 +283,13 @@ cc-router configure          (Re)write ~/.claude/settings.json
 cc-router configure --show   Show current Claude Code proxy settings
 cc-router configure --remove Remove cc-router settings (same as revert without stopping)
 
+cc-router client connect <url>       Connect Claude Code to a remote CC-Router
+cc-router client connect --desktop   Also configure Claude Desktop interception
+cc-router client disconnect          Revert all client configuration
+cc-router client status              Show connection + remote server health
+cc-router client start-desktop       Start mitmproxy interceptor for Claude Desktop
+cc-router client stop-desktop        Stop mitmproxy interceptor
+
 cc-router docker up          Start full Docker stack (cc-router + LiteLLM)
 cc-router docker up --build  Rebuild cc-router image before starting
 cc-router docker down        Stop Docker containers
@@ -318,6 +328,129 @@ cc-router docker up
 ```
 
 See [docs/litellm-setup.md](docs/litellm-setup.md) for details.
+
+---
+
+## Client mode — connecting to an existing CC-Router
+
+If someone on your team already hosts a CC-Router instance (on a VPS, home server, or another machine on the LAN), you don't need to install accounts locally. You just point your Claude Code at the remote proxy.
+
+The setup wizard asks about this at the very first step:
+
+```bash
+cc-router setup
+# → What do you want to do?
+#   • Host CC-Router on this machine
+#   • Connect to an existing CC-Router server  ← pick this
+```
+
+Or use the dedicated command directly:
+
+```bash
+# Quick connect — just point Claude Code at the remote proxy
+cc-router client connect http://192.168.1.50:3456 --secret cc-rtr-abc123...
+
+# Check status
+cc-router client status
+
+# Disconnect (restores Claude Code defaults)
+cc-router client disconnect
+```
+
+Client mode writes `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` into `~/.claude/settings.json`, so Claude Code talks directly to the remote proxy. Nothing runs locally — no accounts, no proxy process, no resources.
+
+### CLI reference
+
+```text
+cc-router client connect <url>       Connect Claude Code to a CC-Router server
+cc-router client connect --desktop   Also configure Claude Desktop interception
+cc-router client connect -s <secret> Pass the proxy secret inline (or use --secret)
+cc-router client disconnect          Revert all client configuration
+cc-router client status              Show current connection + remote server health
+cc-router client start-desktop       Start the Claude Desktop mitmproxy interceptor
+cc-router client stop-desktop        Stop the Claude Desktop interceptor
+```
+
+---
+
+## Claude Desktop support
+
+Claude Desktop (chat + Cowork) **can be routed through CC-Router**, but unlike Claude Code it does not respect `ANTHROPIC_BASE_URL`. It talks directly to `api.anthropic.com` via an embedded Anthropic SDK. To redirect its traffic, CC-Router uses [mitmproxy](https://mitmproxy.org/) in *local redirect mode* — a process-scoped interceptor that only captures Claude Desktop's network traffic and forwards it to the proxy.
+
+This is **opt-in** — the setup wizard will ask if you want it.
+
+### Requirements
+
+- **mitmproxy ≥ 10.1.5** (macOS, Windows) or **≥ 11.1** (Linux — requires kernel ≥ 6.8)
+- Admin access to install the mitmproxy CA certificate
+- On macOS: manual approval of mitmproxy's Network Extension (one time, via System Settings)
+
+### Installing mitmproxy
+
+```bash
+# macOS
+brew install mitmproxy
+
+# Windows
+# Download the installer from https://mitmproxy.org/downloads/
+# (or: pip install mitmproxy)
+
+# Linux
+pip install mitmproxy        # kernel 6.8+ required for local mode
+```
+
+### Enabling Desktop interception
+
+During `cc-router setup` or `cc-router client connect`, answer **Yes** when asked about Claude Desktop. The wizard will:
+
+1. Check that mitmproxy is installed
+2. Generate the mitmproxy CA certificate (if not already present)
+3. Install the CA into the OS trust store (requires sudo/admin)
+4. Write the redirect addon to `~/.cc-router/interceptor/addon.py`
+5. On macOS, prompt you to approve the Network Extension
+
+Then start the interceptor:
+
+```bash
+cc-router client start-desktop
+```
+
+Open Claude Desktop and send a message. The request will be intercepted, redirected to CC-Router, and round-robinned across your accounts just like Claude Code traffic.
+
+### Stopping / removing Desktop interception
+
+```bash
+cc-router client stop-desktop    # Stop the interceptor (keep configuration)
+cc-router client disconnect      # Stop + remove all client config
+```
+
+### How it works under the hood
+
+```
+Claude Desktop
+     │
+     │  tries to connect to api.anthropic.com:443
+     ▼
+mitmproxy (local mode)
+     │  addon.py rewrites scheme/host to CC-Router
+     ▼
+CC-Router :3456 ──► api.anthropic.com  (with OAuth Bearer token)
+```
+
+mitmproxy's local mode is *process-scoped* — it only intercepts traffic from the Claude process, not your browser, curl, or any other app. The OS-level interception uses:
+
+| Platform | Mechanism |
+|----------|-----------|
+| macOS    | Network Extension (App Proxy Provider API) |
+| Windows  | WinDivert (WFP kernel driver) |
+| Linux    | eBPF (kernel ≥ 6.8) |
+
+### Troubleshooting
+
+- **macOS: "provider rejected new flow"** — re-enable Mitmproxy Redirector in System Settings → General → Login Items & Extensions → Network Extensions, then restart mitmproxy.
+- **Windows: UAC prompt every start** — expected; mitmproxy's redirector needs admin at runtime.
+- **Linux: "eBPF program failed to load"** — check your kernel version with `uname -r`. You need ≥ 6.8.
+- **Chat shows "failed to connect"** — make sure CC-Router is reachable from the mitmproxy process. Run `curl http://localhost:3456/cc-router/health` to verify the proxy is up.
 
 ---
 

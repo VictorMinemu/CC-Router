@@ -13,10 +13,18 @@ import {
 import { validateToken } from "../utils/token-validator.js";
 import { writeClaudeSettings, readClaudeProxySettings } from "../utils/claude-config.js";
 import { saveAccounts } from "../proxy/token-refresher.js";
-import { loadAccounts, accountsFileExists, readConfig, writeConfig, generateProxySecret } from "../config/manager.js";
+import { loadAccounts, accountsFileExists, readConfig, writeConfig, generateProxySecret, type ClientConfig } from "../config/manager.js";
 import { PROXY_PORT } from "../config/paths.js";
 import type { Account, OAuthTokens } from "../proxy/types.js";
 import { DEFAULT_RATE_LIMITS } from "../proxy/types.js";
+import { existsSync } from "fs";
+import {
+  checkMitmproxyInstalled,
+  isCaCertInstalled,
+  generateCaCert,
+  installCaCert,
+  writeAddonScript,
+} from "../interceptor/mitmproxy-manager.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -128,9 +136,35 @@ export async function setupSingleAccount(index: number): Promise<Account | null>
 async function runSetupWizard({ addMode }: { addMode: boolean }): Promise<void> {
   const platform = detectPlatform();
   const hasExisting = accountsFileExists();
+  const existingClient = readConfig().client;
 
   printBanner();
   console.log(chalk.gray(`Platform: ${platform}\n`));
+
+  // ── Mode selection (only when nothing is configured yet) ─────────────────
+  // If there are no accounts and no existing client config, ask whether the
+  // user wants to host cc-router (server mode) or connect to an existing one
+  // (client mode). In client mode we skip account setup entirely.
+  if (!hasExisting && !existingClient && !addMode) {
+    const mode = await select({
+      message: "What do you want to do?",
+      choices: [
+        {
+          name: "Host CC-Router on this machine  (manage tokens and accounts here)",
+          value: "server" as const,
+        },
+        {
+          name: "Connect to an existing CC-Router server  (client mode)",
+          value: "client" as const,
+        },
+      ],
+    });
+
+    if (mode === "client") {
+      await runClientSetupFromWizard();
+      return;
+    }
+  }
 
   if (hasExisting && !addMode) {
     const existing = loadAccounts();
@@ -552,6 +586,115 @@ async function promptManualTokens(): Promise<OAuthTokens | null> {
     expiresAt,
     scopes: ["user:inference", "user:profile"],
   };
+}
+
+// ─── Client-mode setup (from wizard) ─────────────────────────────────────────
+
+async function runClientSetupFromWizard(): Promise<void> {
+  console.log(chalk.bold("\n🔗 Client Mode — Connect to a CC-Router server\n"));
+
+  const rawUrl = await input({
+    message: "CC-Router server URL (e.g. 192.168.1.50:3456):",
+  });
+  let url = rawUrl.trim().replace(/\/+$/, "");
+  if (!url.startsWith("http://") && !url.startsWith("https://")) url = `http://${url}`;
+
+  const secret =
+    (await input({
+      message: "Proxy secret (leave empty if none):",
+      transformer: (v) => (v ? "•".repeat(v.length) : ""),
+    })) || undefined;
+
+  // Test connection
+  console.log(chalk.gray(`\nTesting connection to ${url}...`));
+  let accounts: number | undefined;
+  try {
+    const headers: Record<string, string> = {};
+    if (secret) headers["authorization"] = `Bearer ${secret}`;
+    const res = await fetch(`${url}/cc-router/health`, {
+      headers,
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = (await res.json()) as { status?: string; accounts?: unknown[] };
+    accounts = data.accounts?.length;
+    console.log(chalk.green(`✓ Connected — ${accounts ?? "?"} accounts on server\n`));
+  } catch (e) {
+    console.error(chalk.red(`\n✗ Cannot reach CC-Router at ${url}`));
+    console.error(chalk.yellow(`  Error: ${(e as Error).message}`));
+    console.error(chalk.gray("  Make sure the server is running and the URL is correct.\n"));
+    process.exit(1);
+  }
+
+  // Save config
+  const cfg = readConfig();
+  const clientCfg: ClientConfig = { remoteUrl: url };
+  if (secret) clientCfg.remoteSecret = secret;
+  cfg.client = clientCfg;
+  writeConfig(cfg);
+
+  // Configure Claude Code
+  writeClaudeSettings(0, url, secret ?? "proxy-managed");
+  console.log(chalk.green("✓ Claude Code configured"));
+  console.log(chalk.gray(`  ANTHROPIC_BASE_URL → ${url}\n`));
+
+  // ── Claude Desktop question ─────────────────────────────────────────────
+  const desktopInstalled = isMacos() && existsSync("/Applications/Claude.app");
+  if (desktopInstalled) {
+    const wantsDesktop = await confirm({
+      message: "Also route Claude Desktop (chat + Cowork) through the proxy?",
+      default: false,
+    });
+    if (wantsDesktop) {
+      await setupDesktopFromWizard(url);
+      cfg.client!.desktopEnabled = true;
+      writeConfig(cfg);
+    }
+  }
+
+  console.log(chalk.bold.green(`\n${"━".repeat(40)}\n  Client mode active\n${"━".repeat(40)}\n`));
+  console.log(`  Check status:       ${chalk.cyan("cc-router client status")}`);
+  console.log(`  Disconnect:         ${chalk.cyan("cc-router client disconnect")}`);
+  if (cfg.client?.desktopEnabled) {
+    console.log(`  Start Desktop:      ${chalk.cyan("cc-router client start-desktop")}`);
+  }
+  console.log();
+}
+
+async function setupDesktopFromWizard(target: string): Promise<void> {
+  console.log(chalk.bold("\n🖥  Claude Desktop Setup\n"));
+
+  if (!(await checkMitmproxyInstalled())) {
+    console.log(chalk.yellow("mitmproxy is required but not installed."));
+    console.log(chalk.cyan("  Install: brew install mitmproxy\n"));
+    const proceed = await confirm({ message: "Have you installed mitmproxy?", default: false });
+    if (!proceed || !(await checkMitmproxyInstalled())) {
+      console.log(chalk.red("Skipping Desktop setup.\n"));
+      return;
+    }
+  }
+  console.log(chalk.green("✓ mitmproxy found"));
+
+  if (!isCaCertInstalled()) {
+    console.log(chalk.gray("Generating mitmproxy CA certificate..."));
+    await generateCaCert();
+  }
+
+  console.log(chalk.yellow("\nInstalling the CA certificate requires your admin password."));
+  const doInstall = await confirm({ message: "Install CA certificate now?", default: true });
+  if (doInstall) {
+    const ok = await installCaCert();
+    console.log(ok ? chalk.green("✓ CA certificate installed") : chalk.red("✗ CA install failed — install manually later"));
+  }
+
+  writeAddonScript(target);
+  console.log(chalk.green("✓ Redirect addon configured"));
+
+  if (isMacos()) {
+    console.log(chalk.yellow("\n⚠  On first run macOS will ask to approve mitmproxy's Network Extension."));
+    console.log(chalk.gray("   System Settings → General → Login Items & Extensions → Network Extensions"));
+    console.log(chalk.gray("   Toggle 'Mitmproxy Redirector' on.\n"));
+  }
 }
 
 function printBanner(): void {

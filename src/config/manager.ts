@@ -47,10 +47,27 @@ export function loadAccounts(): Account[] {
 
 // ─── Proxy config (password, future settings) ─────────────────────────────────
 
+/**
+ * Client mode config — when present, this machine is acting as a CLIENT to a
+ * remote (or local) CC-Router instance instead of running its own proxy.
+ * Claude Code's ANTHROPIC_BASE_URL points at `remoteUrl`; Claude Desktop
+ * (optionally) is intercepted via mitmproxy and redirected to the same URL.
+ */
+export interface ClientConfig {
+  /** Full URL of the CC-Router server, e.g. "http://192.168.1.50:3456" or "https://proxy.example.com" */
+  remoteUrl: string;
+  /** Optional Bearer secret for authenticating against the remote proxy */
+  remoteSecret?: string;
+  /** True once `cc-router client connect --desktop` has successfully provisioned mitmproxy */
+  desktopEnabled?: boolean;
+}
+
 export interface ProxyConfig {
   proxySecret?: string;
   /** Auto-update on patch/minor releases. Default: true (enabled). Set to false to disable. */
   autoUpdate?: boolean;
+  /** Present only when this machine is in "client" mode (connected to a remote CC-Router) */
+  client?: ClientConfig;
 }
 
 export function readConfig(): ProxyConfig {

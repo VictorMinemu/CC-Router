@@ -9,6 +9,7 @@ import { registerService } from "./cmd-service.js";
 import { registerConfigure } from "./cmd-configure.js";
 import { registerDocker } from "./cmd-docker.js";
 import { registerUpdate } from "./cmd-update.js";
+import { registerClient } from "./cmd-client.js";
 import { getCurrentVersion, checkForUpdate, printUpdateBanner } from "../utils/self-update.js";
 
 const program = new Command();
@@ -31,6 +32,8 @@ Examples:
   $ cc-router revert             # Restore Claude Code to normal (remove proxy config)
   $ cc-router docker up          # Full stack: cc-router + LiteLLM in Docker
   $ cc-router docker down        # Stop Docker stack
+  $ cc-router client connect <url>   # Route Claude Code through a remote CC-Router
+  $ cc-router client start-desktop   # Route Claude Desktop via mitmproxy interceptor
 `);
 
 registerSetup(program);
@@ -43,6 +46,7 @@ registerService(program);
 registerConfigure(program);
 registerDocker(program);
 registerUpdate(program);
+registerClient(program);
 
 // Background update check — fires on every CLI invocation, uses 6h disk cache
 // so it's essentially free after the first check. Notify on process exit.

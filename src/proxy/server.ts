@@ -109,9 +109,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = express();
 
   // ─── Proxy auth middleware ─────────────────────────────────────────────────
-  // If a proxySecret is configured, all requests must present it as
-  // "Authorization: Bearer <secret>". The /cc-router/health endpoint is
-  // always exempt so monitoring and PM2 healthchecks keep working.
+  // If a proxySecret is configured, all requests must present it as EITHER
+  //   "Authorization: Bearer <secret>" (Claude Code CLI, HTTP clients)
+  //   OR "x-api-key: <secret>" (Claude Desktop via mitmproxy, Anthropic SDK)
+  // The /cc-router/health endpoint is always exempt so monitoring and PM2
+  // healthchecks keep working.
   const { proxySecret } = readConfig();
   if (proxySecret) {
     const secretBuf = Buffer.from(proxySecret, "utf-8");
@@ -119,12 +121,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       if (req.path === "/cc-router/health") return next();
 
       const auth = (req.headers["authorization"] as string | undefined) ?? "";
-      const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-      const tokenBuf = Buffer.from(token, "utf-8");
+      const bearerToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+      const apiKey = (req.headers["x-api-key"] as string | undefined) ?? "";
+      const presented = bearerToken || apiKey;
+      const presentedBuf = Buffer.from(presented, "utf-8");
 
       if (
-        tokenBuf.length !== secretBuf.length ||
-        !timingSafeEqual(tokenBuf, secretBuf)
+        presentedBuf.length !== secretBuf.length ||
+        !timingSafeEqual(presentedBuf, secretBuf)
       ) {
         res.status(401).json({
           type: "error",

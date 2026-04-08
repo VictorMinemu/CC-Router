@@ -1,6 +1,6 @@
 {
   "name": "ai-cc-router",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "description": "Round-robin proxy for Claude Max OAuth tokens — use multiple Claude Max accounts with Claude Code",
   "type": "module",
   "bin": {
@@ -34,6 +34,7 @@
   "homepage": "https://github.com/VictorMinemu/CC-Router#readme",
   "files": [
     "dist/",
+    "src/interceptor/addon.py",
     "litellm-config.yaml",
     "docker-compose.yml",
     "Dockerfile",

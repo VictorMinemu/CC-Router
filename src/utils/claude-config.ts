@@ -15,8 +15,9 @@ import { readConfig } from "../config/manager.js";
  * @param port - proxy port (used only when baseUrl is not provided)
  * @param baseUrl - full proxy URL e.g. "http://192.168.1.50:3456" or "https://cc-router.example.com"
  *                  If omitted, defaults to http://localhost:<port>
+ * @param authToken - explicit auth token; when omitted, reads proxySecret from config or uses "proxy-managed"
  */
-export function writeClaudeSettings(port: number, baseUrl?: string): void {
+export function writeClaudeSettings(port: number, baseUrl?: string, authToken?: string): void {
   const dir = dirname(CLAUDE_SETTINGS_PATH);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
@@ -39,8 +40,9 @@ export function writeClaudeSettings(port: number, baseUrl?: string): void {
       ...existingEnv,
       ANTHROPIC_BASE_URL: resolvedUrl,
       // ANTHROPIC_AUTH_TOKEN has higher precedence than ANTHROPIC_API_KEY in Claude Code.
-      // Uses the configured proxy secret if set, otherwise falls back to the open placeholder.
-      ANTHROPIC_AUTH_TOKEN: readConfig().proxySecret ?? "proxy-managed",
+      // Explicit authToken wins (client mode points at a remote secret); otherwise
+      // uses the local proxy secret, or the open placeholder if neither is set.
+      ANTHROPIC_AUTH_TOKEN: authToken ?? readConfig().proxySecret ?? "proxy-managed",
     },
   };
 
