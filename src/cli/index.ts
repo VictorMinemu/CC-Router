@@ -10,6 +10,7 @@ import { registerConfigure } from "./cmd-configure.js";
 import { registerDocker } from "./cmd-docker.js";
 import { registerUpdate } from "./cmd-update.js";
 import { registerClient } from "./cmd-client.js";
+import { registerTelemetry } from "./cmd-telemetry.js";
 import { getCurrentVersion, checkForUpdate, printUpdateBanner } from "../utils/self-update.js";
 
 const program = new Command();
@@ -47,6 +48,7 @@ registerConfigure(program);
 registerDocker(program);
 registerUpdate(program);
 registerClient(program);
+registerTelemetry(program);
 
 // Background update check — fires on every CLI invocation, uses 6h disk cache
 // so it's essentially free after the first check. Notify on process exit.

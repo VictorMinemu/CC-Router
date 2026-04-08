@@ -28,6 +28,8 @@ import {
   openNetworkExtensionSettings,
 } from "../interceptor/mitmproxy-manager.js";
 import { printDesktopSupportExplainer, printNetworkExtensionInstructions } from "./cmd-client.js";
+import { loadTelemetryState, writeTelemetryState } from "../config/telemetry.js";
+import { trackEvent } from "../utils/telemetry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -252,8 +254,37 @@ async function runSetupWizard({ addMode }: { addMode: boolean }): Promise<void> 
   saveAccounts(merged);
   console.log(chalk.green(`  ✓ ${merged.length} account(s) saved to ~/.cc-router/accounts.json`));
 
+  showTelemetryDisclosureIfNeeded();
+  void trackEvent("setup_completed", { account_count: merged.length });
+
   // ─── Post-setup interactive flow ─────────────────────────────────────────
   await runPostSetupFlow(merged.length);
+}
+
+// Anonymous telemetry disclosure, shown exactly once after a successful setup.
+// Controlled by telemetry.disclosureShown in ~/.cc-router/telemetry.json.
+function showTelemetryDisclosureIfNeeded(): void {
+  try {
+    const state = loadTelemetryState();
+    if (state.disclosureShown) return;
+    console.log();
+    console.log(chalk.dim("─".repeat(60)));
+    console.log(chalk.bold("  Anonymous usage analytics"));
+    console.log();
+    console.log("  CC-Router sends anonymous lifecycle events (version, OS,");
+    console.log("  startup, heartbeat) to help us understand usage and prioritize");
+    console.log("  improvements. No IPs, no tokens, no prompts, no request content.");
+    console.log();
+    console.log(`  Disable:    ${chalk.cyan("cc-router telemetry off")}`);
+    console.log(`  Or set:     ${chalk.cyan("DO_NOT_TRACK=1")}   |   ${chalk.cyan("CC_ROUTER_TELEMETRY=0")}`);
+    console.log(`  Source:     ${chalk.dim("src/utils/telemetry.ts")}`);
+    console.log(chalk.dim("─".repeat(60)));
+    console.log();
+    state.disclosureShown = true;
+    writeTelemetryState(state);
+  } catch {
+    // never block setup on telemetry errors
+  }
 }
 
 // ─── Post-setup interactive flow ─────────────────────────────────────────────

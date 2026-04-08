@@ -20,3 +20,8 @@ export const LITELLM_URL = process.env["LITELLM_URL"];
 export const CONFIG_PATH =
   process.env["CONFIG_PATH"] ??
   path.join(CONFIG_DIR, "config.json");
+
+// Anonymous telemetry state — install id + opt-in flag
+export const TELEMETRY_PATH =
+  process.env["TELEMETRY_PATH"] ??
+  path.join(CONFIG_DIR, "telemetry.json");
