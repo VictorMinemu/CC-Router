@@ -30,7 +30,30 @@ function isClaudeDesktopInstalled(): boolean {
   return false;
 }
 
-async function testRemoteConnection(url: string, secret?: string): Promise<{ ok: boolean; error?: string; accounts?: number }> {
+interface RemoteHealth {
+  status?: string;
+  uptime?: number;
+  totalRequests?: number;
+  totalErrors?: number;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheReadTokens?: number;
+  accounts?: Array<{ id: string; healthy?: boolean; requestCount?: number; errorCount?: number }>;
+  recentLogs?: Array<{
+    ts: number;
+    accountId: string;
+    method?: string;
+    path?: string;
+    statusCode?: number;
+    durationMs?: number;
+    type?: string;
+  }>;
+}
+
+async function fetchRemoteHealth(
+  url: string,
+  secret?: string,
+): Promise<{ ok: boolean; error?: string; data?: RemoteHealth }> {
   try {
     const headers: Record<string, string> = {};
     if (secret) headers["authorization"] = `Bearer ${secret}`;
@@ -41,11 +64,33 @@ async function testRemoteConnection(url: string, secret?: string): Promise<{ ok:
     clearTimeout(timeout);
 
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
-    const data = (await res.json()) as { status?: string; accounts?: unknown[] };
-    return { ok: data.status === "ok" || data.status === "degraded", accounts: data.accounts?.length };
+    const data = (await res.json()) as RemoteHealth;
+    return { ok: data.status === "ok" || data.status === "degraded", data };
   } catch (e) {
     return { ok: false, error: (e as Error).message };
   }
+}
+
+function formatUptime(seconds: number): string {
+  if (!seconds || seconds < 0) return "0s";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function formatNumber(n: number | undefined): string {
+  if (n === undefined || n === null) return "0";
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString(undefined, { hour12: false });
 }
 
 function formatUrl(raw: string): string {
@@ -88,14 +133,14 @@ export function registerClient(program: Command): void {
 
       // 3. Test connection
       console.log(chalk.gray(`\nTesting connection to ${url}...`));
-      const test = await testRemoteConnection(url, secret);
+      const test = await fetchRemoteHealth(url, secret);
       if (!test.ok) {
         console.error(chalk.red(`\n✗ Cannot reach CC-Router at ${url}`));
         console.error(chalk.yellow(`  Error: ${test.error}`));
         console.error(chalk.gray("  Make sure the server is running and accessible.\n"));
         process.exit(1);
       }
-      console.log(chalk.green(`✓ Connected — ${test.accounts ?? "?"} accounts on server\n`));
+      console.log(chalk.green(`✓ Connected — ${test.data?.accounts?.length ?? "?"} accounts on server\n`));
 
       // 4. Save client config
       const cfg = readConfig();
@@ -154,8 +199,9 @@ export function registerClient(program: Command): void {
   // ── cc-router client status ─────────────────────────────────────────────────
   client
     .command("status")
-    .description("Show client connection status")
-    .action(async () => {
+    .description("Show client connection status with live stats from the remote")
+    .option("--json", "Output raw remote health JSON")
+    .action(async (opts: { json?: boolean }) => {
       const cfg = readConfig();
       const claude = readClaudeProxySettings();
 
@@ -165,28 +211,84 @@ export function registerClient(program: Command): void {
         return;
       }
 
+      // Fetch live health from remote
+      const test = await fetchRemoteHealth(cfg.client.remoteUrl, cfg.client.remoteSecret);
+
+      if (opts.json) {
+        console.log(JSON.stringify(test.data ?? { error: test.error }, null, 2));
+        return;
+      }
+
       console.log(chalk.bold("\n📡 CC-Router Client Status\n"));
       console.log(`  Remote:   ${chalk.cyan(cfg.client.remoteUrl)}`);
       console.log(`  Auth:     ${cfg.client.remoteSecret ? chalk.green("secret configured") : chalk.gray("no auth")}`);
       console.log(`  Claude:   ${claude.baseUrl ? chalk.green(claude.baseUrl) : chalk.red("not configured")}`);
 
-      // Ping remote
-      const test = await testRemoteConnection(cfg.client.remoteUrl, cfg.client.remoteSecret);
-      if (test.ok) {
-        console.log(`  Server:   ${chalk.green("online")} (${test.accounts} accounts)`);
-      } else {
+      if (!test.ok) {
         console.log(`  Server:   ${chalk.red("unreachable")} — ${test.error}`);
+        console.log(chalk.gray("\n  The remote proxy isn't responding. Your requests may be failing."));
+        console.log();
+        return;
       }
 
-      // Desktop status
+      const d = test.data!;
+      console.log(`  Server:   ${chalk.green("online")}  ·  up ${chalk.gray(formatUptime(d.uptime ?? 0))}`);
+
+      // ── Totals ─────────────────────────────────────────────────────────
+      console.log(chalk.bold("\n  TOTALS"));
+      console.log(
+        `    Requests: ${chalk.cyan(formatNumber(d.totalRequests))}` +
+        `   Errors: ${((d.totalErrors ?? 0) > 0 ? chalk.red : chalk.gray)(formatNumber(d.totalErrors))}`,
+      );
+      console.log(
+        `    Input:    ${chalk.gray(formatNumber(d.totalInputTokens))} tok` +
+        `   Output: ${chalk.gray(formatNumber(d.totalOutputTokens))} tok` +
+        `   Cache read: ${chalk.gray(formatNumber(d.totalCacheReadTokens))} tok`,
+      );
+
+      // ── Accounts ───────────────────────────────────────────────────────
+      if (d.accounts && d.accounts.length > 0) {
+        console.log(chalk.bold("\n  ACCOUNTS"));
+        for (const a of d.accounts) {
+          const dot = a.healthy ? chalk.green("●") : chalk.red("●");
+          console.log(
+            `    ${dot} ${a.id.padEnd(20)}  req ${String(a.requestCount ?? 0).padStart(5)}  ` +
+            `err ${String(a.errorCount ?? 0).padStart(3)}`,
+          );
+        }
+      }
+
+      // ── Recent activity ────────────────────────────────────────────────
+      if (d.recentLogs && d.recentLogs.length > 0) {
+        console.log(chalk.bold("\n  RECENT ACTIVITY  (last 5)"));
+        for (const log of d.recentLogs.slice(0, 5)) {
+          const status = log.statusCode ?? 0;
+          const statusColor = status >= 500 || status === 0 ? chalk.red : status >= 400 ? chalk.yellow : chalk.green;
+          const duration = log.durationMs ? ` ${chalk.gray(log.durationMs + "ms")}` : "";
+          console.log(
+            `    ${chalk.gray(formatTime(log.ts))}  ${log.accountId.padEnd(18)}  ` +
+            `${(log.method ?? "?").padEnd(5)} ${(log.path ?? "?").padEnd(22)}  ` +
+            `${statusColor(String(status))}${duration}`,
+          );
+        }
+      } else {
+        console.log(chalk.gray("\n  No recent activity on the remote proxy."));
+      }
+
+      // ── Desktop status ─────────────────────────────────────────────────
+      console.log(chalk.bold("\n  DESKTOP INTERCEPTOR"));
       if (cfg.client.desktopEnabled) {
         const running = await isInterceptorRunning();
-        console.log(`  Desktop:  ${running ? chalk.green("intercepting") : chalk.yellow("configured but not running")}`);
+        console.log(`    ${running ? chalk.green("● running") : chalk.yellow("○ configured but stopped")}`);
+        if (!running) {
+          console.log(chalk.gray("    Start with: cc-router client start-desktop"));
+        }
       } else {
-        console.log(`  Desktop:  ${chalk.gray("not configured")}`);
+        console.log(`    ${chalk.gray("not configured")}`);
       }
 
       console.log();
+      console.log(chalk.gray("  Live dashboard: cc-router status\n"));
     });
 
   // ── cc-router client start-desktop ──────────────────────────────────────────

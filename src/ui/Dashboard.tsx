@@ -55,7 +55,16 @@ interface HealthData {
 
 // ─── Dashboard component ──────────────────────────────────────────────────────
 
-export function Dashboard({ port }: { port: number }) {
+export interface DashboardProps {
+  /** Port used when baseUrl is not provided — defaults to http://localhost:<port>/cc-router/health */
+  port: number;
+  /** Explicit full base URL (e.g. "http://192.168.1.50:3456"). Takes precedence over port. */
+  baseUrl?: string;
+  /** Optional Bearer secret for authenticating against a remote proxy */
+  authToken?: string;
+}
+
+export function Dashboard({ port, baseUrl, authToken }: DashboardProps) {
   const { exit } = useApp();
   const [data, setData] = useState<HealthData | null>(null);
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -69,9 +78,17 @@ export function Dashboard({ port }: { port: number }) {
   useEffect(() => {
     let cancelled = false;
 
+    const healthUrl = baseUrl
+      ? `${baseUrl.replace(/\/+$/, "")}/cc-router/health`
+      : `http://localhost:${port}/cc-router/health`;
+    const headers: Record<string, string> = authToken
+      ? { authorization: `Bearer ${authToken}` }
+      : {};
+
     const poll = async () => {
       try {
-        const res = await fetch(`http://localhost:${port}/cc-router/health`, {
+        const res = await fetch(healthUrl, {
+          headers,
           signal: AbortSignal.timeout(1_500),
         });
         if (cancelled) return;

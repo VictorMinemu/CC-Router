@@ -1,6 +1,24 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { PROXY_PORT } from "../config/paths.js";
+import { readConfig } from "../config/manager.js";
+
+/**
+ * Resolves where the health endpoint lives.
+ *
+ * In client mode → remote CC-Router URL (from config)
+ * Otherwise      → http://localhost:<port>
+ */
+function resolveTarget(): { healthUrl: string; headers: Record<string, string>; baseUrl?: string; authToken?: string } {
+  const cfg = readConfig();
+  if (cfg.client) {
+    const base = cfg.client.remoteUrl.replace(/\/+$/, "");
+    const headers: Record<string, string> = {};
+    if (cfg.client.remoteSecret) headers["authorization"] = `Bearer ${cfg.client.remoteSecret}`;
+    return { healthUrl: `${base}/cc-router/health`, headers, baseUrl: base, authToken: cfg.client.remoteSecret };
+  }
+  return { healthUrl: `http://localhost:${PROXY_PORT}/cc-router/health`, headers: {} };
+}
 
 export function registerStatus(program: Command): void {
   program
@@ -21,8 +39,10 @@ export function registerStatus(program: Command): void {
 }
 
 async function jsonOutput(port: number): Promise<void> {
+  const { healthUrl, headers } = resolveTarget();
   try {
-    const res = await fetch(`http://localhost:${port}/cc-router/health`, {
+    const res = await fetch(healthUrl, {
+      headers,
       signal: AbortSignal.timeout(2_000),
     });
     if (!res.ok) {
@@ -31,13 +51,20 @@ async function jsonOutput(port: number): Promise<void> {
     }
     console.log(JSON.stringify(await res.json(), null, 2));
   } catch {
-    console.error(chalk.red(`Cannot connect to proxy at http://localhost:${port}`));
-    console.error(chalk.gray("Is it running? Start with: cc-router start"));
+    console.error(chalk.red(`Cannot connect to proxy at ${healthUrl}`));
+    const cfg = readConfig();
+    if (cfg.client) {
+      console.error(chalk.gray("Is the remote CC-Router running?"));
+    } else {
+      console.error(chalk.gray("Is it running? Start with: cc-router start"));
+    }
     process.exit(1);
   }
 }
 
 async function launchDashboard(port: number): Promise<void> {
+  const { baseUrl, authToken } = resolveTarget();
+
   // Dynamic imports keep these heavy deps out of the cold-start path
   const [{ render }, { createElement }, { Dashboard }] = await Promise.all([
     import("ink"),
@@ -45,7 +72,7 @@ async function launchDashboard(port: number): Promise<void> {
     import("../ui/Dashboard.js"),
   ]);
 
-  render(createElement(Dashboard, { port }), {
+  render(createElement(Dashboard, { port, baseUrl, authToken }), {
     // Let Ink handle Ctrl+C — it calls exit() which cleanly unmounts
     exitOnCtrlC: true,
   });
