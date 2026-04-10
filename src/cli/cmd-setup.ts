@@ -28,7 +28,7 @@ import {
   openNetworkExtensionSettings,
 } from "../interceptor/mitmproxy-manager.js";
 import { printDesktopSupportExplainer, printNetworkExtensionInstructions } from "./cmd-client.js";
-import { trackEvent, showTelemetryDisclosureIfNeeded } from "../utils/telemetry.js";
+import { trackEvent } from "../utils/telemetry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -253,7 +253,6 @@ async function runSetupWizard({ addMode }: { addMode: boolean }): Promise<void> 
   saveAccounts(merged);
   console.log(chalk.green(`  ✓ ${merged.length} account(s) saved to ~/.cc-router/accounts.json`));
 
-  showTelemetryDisclosureIfNeeded();
   void trackEvent("setup_completed", { account_count: merged.length });
 
   // ─── Post-setup interactive flow ─────────────────────────────────────────

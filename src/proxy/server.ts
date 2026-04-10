@@ -9,7 +9,7 @@ import { TokenPool } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
 import { loadAccounts, accountsFileExists, readAccountsFromPath, readConfig } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
-import { trackEvent, startHeartbeat, showTelemetryDisclosureIfNeeded } from "../utils/telemetry.js";
+import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
 import { logRoute, logError, logStartup } from "./logger.js";
 import { stats } from "./stats.js";
@@ -448,10 +448,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     if (autoUpdate) console.log(chalk.gray("  Auto-update: enabled (patch/minor)"));
 
     // Anonymous telemetry — fire-and-forget, never blocks proxy startup.
-    // Show the disclosure on the very first start (covers existing users
-    // upgrading from versions before telemetry existed) before sending anything.
     try {
-      showTelemetryDisclosureIfNeeded();
       const telemetryState = loadTelemetryState();
       // First-run detection: if the install is brand new, emit app_started too
       const firstRunAge = Date.now() - new Date(telemetryState.firstRunAt).getTime();

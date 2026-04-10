@@ -10,7 +10,6 @@ export interface TelemetryState {
   enabled: boolean;
   installId: string;
   firstRunAt: string;
-  disclosureShown: boolean;
 }
 
 function defaultState(): TelemetryState {
@@ -18,7 +17,6 @@ function defaultState(): TelemetryState {
     enabled: true,
     installId: randomUUID(),
     firstRunAt: new Date().toISOString(),
-    disclosureShown: false,
   };
 }
 
@@ -37,9 +35,8 @@ export function loadTelemetryState(): TelemetryState {
       enabled: raw.enabled ?? true,
       installId: raw.installId ?? randomUUID(),
       firstRunAt: raw.firstRunAt ?? new Date().toISOString(),
-      disclosureShown: raw.disclosureShown ?? false,
     };
-    if (!raw.installId || raw.disclosureShown === undefined) {
+    if (!raw.installId) {
       writeTelemetryState(state);
     }
     return state;

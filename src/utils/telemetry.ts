@@ -1,6 +1,5 @@
 import os from "os";
-import chalk from "chalk";
-import { isTelemetryEnabled, loadTelemetryState, writeTelemetryState } from "../config/telemetry.js";
+import { isTelemetryEnabled, loadTelemetryState } from "../config/telemetry.js";
 import { detectPlatform } from "./platform.js";
 import { getCurrentVersion } from "./self-update.js";
 
@@ -35,9 +34,11 @@ function getOsName(): string {
 
 function getLocale(): string {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().locale;
+    // Aptabase limits locale to 10 characters — truncate extended subtags
+    const raw = Intl.DateTimeFormat().resolvedOptions().locale;
+    return raw.length <= 10 ? raw : raw.slice(0, 10);
   } catch {
-    return process.env["LANG"]?.split(".")[0] ?? "unknown";
+    return process.env["LANG"]?.split(".")[0]?.slice(0, 10) ?? "unknown";
   }
 }
 
@@ -54,11 +55,14 @@ function getSystemProps(): SystemProps {
   };
 }
 
-// Session ID: <installId>-<epoch-hours>.  This groups events that belong to the
-// same "session" (proxy run) without leaking any timing precision finer than 1h.
+// Session ID groups events from the same install within an hourly window,
+// without leaking timing precision finer than 1h.
+// Aptabase limits sessionId to 36 characters. A UUID with dashes is already 36,
+// so we strip dashes and take the first 24 hex chars + epochHours (~6-7 digits).
 function getSessionId(installId: string): string {
   const epochHours = Math.floor(Date.now() / 3_600_000);
-  return `${installId}-${epochHours}`;
+  const shortId = installId.replace(/-/g, "").slice(0, 24);
+  return `${shortId}${epochHours}`;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -109,31 +113,3 @@ export function startHeartbeat(accountCount: number): void {
   timer.unref();
 }
 
-// One-time disclosure shown the very first time CC-Router runs after install
-// or upgrade. Idempotent — gated by telemetry.disclosureShown so it's safe to
-// call from multiple entry points (setup wizard, foreground start, daemon
-// start, service install). Returns true if the disclosure was just shown.
-export function showTelemetryDisclosureIfNeeded(): boolean {
-  try {
-    const state = loadTelemetryState();
-    if (state.disclosureShown) return false;
-    console.log();
-    console.log(chalk.dim("─".repeat(60)));
-    console.log(chalk.bold("  Anonymous usage analytics"));
-    console.log();
-    console.log("  CC-Router sends anonymous lifecycle events (version, OS,");
-    console.log("  startup, heartbeat) to help us understand usage and prioritize");
-    console.log("  improvements. No IPs, no tokens, no prompts, no request content.");
-    console.log();
-    console.log(`  Disable:    ${chalk.cyan("cc-router telemetry off")}`);
-    console.log(`  Or set:     ${chalk.cyan("DO_NOT_TRACK=1")}   |   ${chalk.cyan("CC_ROUTER_TELEMETRY=0")}`);
-    console.log(`  Source:     ${chalk.dim("src/utils/telemetry.ts")}`);
-    console.log(chalk.dim("─".repeat(60)));
-    console.log();
-    state.disclosureShown = true;
-    writeTelemetryState(state);
-    return true;
-  } catch {
-    return false;
-  }
-}

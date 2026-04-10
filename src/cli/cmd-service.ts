@@ -6,7 +6,6 @@ import { fileURLToPath } from "url";
 import { join, dirname } from "path";
 import chalk from "chalk";
 import { detectPlatform } from "../utils/platform.js";
-import { showTelemetryDisclosureIfNeeded } from "../utils/telemetry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,10 +24,6 @@ export function registerService(program: Command): void {
     .description("Register cc-router to start automatically on system boot")
     .action(async () => {
       console.log(chalk.cyan("\nInstalling cc-router as a system service...\n"));
-
-      // Show telemetry disclosure once before the service takes over — after
-      // this point output goes to PM2 logs, not the user's terminal.
-      showTelemetryDisclosureIfNeeded();
 
       // 1. Verify PM2 is installed
       const pm2Version = await getPm2Version();

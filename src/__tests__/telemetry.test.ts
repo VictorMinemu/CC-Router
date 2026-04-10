@@ -47,7 +47,6 @@ describe("loadTelemetryState", () => {
     expect(state.installId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
-    expect(state.disclosureShown).toBe(false);
     expect(new Date(state.firstRunAt).getTime()).toBeGreaterThan(0);
 
     // Was persisted to disk
@@ -168,7 +167,10 @@ describe("trackEvent", () => {
     expect(body.systemProps.osName).toMatch(/^(macOS|Linux|Windows)$/);
     expect(body.systemProps.engineName).toBe("node");
     expect(body.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(body.sessionId).toContain(loadTelemetryState().installId);
+    // sessionId = first 24 hex chars of installId (no dashes) + epochHours
+    const installHex = loadTelemetryState().installId.replace(/-/g, "").slice(0, 24);
+    expect(body.sessionId).toContain(installHex);
+    expect(body.sessionId.length).toBeLessThanOrEqual(36);
   });
 
   it("does not call fetch when telemetry is disabled", async () => {
