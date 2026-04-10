@@ -25,3 +25,9 @@ export const CONFIG_PATH =
 export const TELEMETRY_PATH =
   process.env["TELEMETRY_PATH"] ??
   path.join(CONFIG_DIR, "telemetry.json");
+
+// Daemon PID file — written by daemon process, read by stop/status
+export const PID_PATH = path.join(CONFIG_DIR, "cc-router.pid");
+
+// Log file — daemon stdout/stderr redirect here
+export const LOG_PATH = path.join(CONFIG_DIR, "cc-router.log");
