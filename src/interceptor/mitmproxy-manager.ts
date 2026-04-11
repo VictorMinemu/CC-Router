@@ -283,8 +283,9 @@ export async function startInterceptor(target: string): Promise<void> {
     }
   }
 
-  // Ensure addon exists
-  if (!existsSync(ADDON_PATH)) writeAddonScript(target);
+  // Always (re)write the addon script so package updates and target-URL
+  // changes are picked up automatically without requiring a fresh setup.
+  writeAddonScript(target);
 
   const processName = getProcessName();
   const args = [
