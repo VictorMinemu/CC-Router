@@ -116,6 +116,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     stats.addLog({ ts: Date.now(), accountId: a.id, model: "-", type: "error", details: msg });
   };
 
+  // Surface rate-limit recovery in the dashboard so users see the account
+  // rejoin the rotation instead of wondering why it stayed red.
+  pool.onCooldownExpired = (a) => {
+    const msg = `${a.id} cooldown expired — rate limit cleared`;
+    stats.addLog({ ts: Date.now(), accountId: a.id, model: "-", type: "route", details: msg });
+  };
+
   startRefreshLoop(accounts);
 
   const app = express();
@@ -154,6 +161,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // ─── Health endpoint (cc-router internal, NOT proxied) ────────────────────
   app.get("/cc-router/health", (_req, res) => {
+    // Sweep expired cooldowns on each poll so the dashboard reflects recovery
+    // even during idle periods when no /v1 request would trigger getNext().
+    pool.sweepExpiredCooldowns();
     res.json({
       status: pool.getHealthy().length > 0 ? "ok" : "degraded",
       mode,

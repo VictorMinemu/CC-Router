@@ -88,9 +88,11 @@ describe("TokenPool — busy accounts", () => {
   it("returns account with earliest reset when ALL healthy accounts are busy", () => {
     const a = makeAccount("a", true, true);
     const b = makeAccount("b", true, true);
-    // "b" resets sooner → should be selected
-    a.rateLimits = { ...DEFAULT_RATE_LIMITS, fiveHourReset: 9999999999 };
-    b.rateLimits = { ...DEFAULT_RATE_LIMITS, fiveHourReset: 1000000000 };
+    // Use future timestamps — past resets get swept to 0 before selection,
+    // which would defeat the "earliest reset" comparison.
+    const nowSec = Math.floor(Date.now() / 1000);
+    a.rateLimits = { ...DEFAULT_RATE_LIMITS, fiveHourReset: nowSec + 7200 };
+    b.rateLimits = { ...DEFAULT_RATE_LIMITS, fiveHourReset: nowSec + 60 };
     const pool = new TokenPool([a, b]);
     expect(pool.getNext().id).toBe("b");
   });
@@ -192,6 +194,172 @@ describe("TokenPool — mutation API", () => {
     const pool = new TokenPool([makeAccount("a")]);
     pool.removeAccount("a");
     expect(() => pool.getNext()).toThrow(EmptyPoolError);
+  });
+});
+
+describe("TokenPool — rate limit cooldown expiry", () => {
+  it("auto-clears rate_limited status when the claimed reset window has passed", () => {
+    const a = makeAccount("a");
+    const pastSec = Math.floor(Date.now() / 1000) - 60;
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "five_hour",
+      fiveHourReset: pastSec,
+    };
+    const pool = new TokenPool([a]);
+    pool.getNext();
+    expect(a.rateLimits.status).toBe("allowed");
+  });
+
+  it("keeps rate_limited status when the claimed reset is still in the future", () => {
+    const a = makeAccount("a");
+    const futureSec = Math.floor(Date.now() / 1000) + 3600;
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "five_hour",
+      fiveHourReset: futureSec,
+    };
+    const pool = new TokenPool([a, makeAccount("b")]);
+    // "a" is still capped → "b" should be used instead.
+    expect(pool.getNext().id).toBe("b");
+    expect(a.rateLimits.status).toBe("rate_limited");
+  });
+
+  it("returns a recovered account to rotation on the next getNext()", () => {
+    const a = makeAccount("a");
+    const b = makeAccount("b");
+    const pastSec = Math.floor(Date.now() / 1000) - 1;
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "seven_day",
+      sevenDayReset: pastSec,
+    };
+    const pool = new TokenPool([a, b]);
+    // Round-robin across both accounts again after recovery.
+    const ids = [pool.getNext().id, pool.getNext().id];
+    expect(ids.sort()).toEqual(["a", "b"]);
+  });
+
+  it("fires onCooldownExpired when an account recovers", () => {
+    const a = makeAccount("a");
+    const pastSec = Math.floor(Date.now() / 1000) - 1;
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "five_hour",
+      fiveHourReset: pastSec,
+    };
+    const pool = new TokenPool([a]);
+    let recovered: Account | null = null;
+    pool.onCooldownExpired = (acct) => { recovered = acct; };
+    pool.getNext();
+    expect(recovered).not.toBeNull();
+    expect(recovered!.id).toBe("a");
+  });
+
+  it("sweepExpiredCooldowns() clears status without selecting an account", () => {
+    const a = makeAccount("a");
+    const pastSec = Math.floor(Date.now() / 1000) - 1;
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "five_hour",
+      fiveHourReset: pastSec,
+    };
+    const pool = new TokenPool([a]);
+    const before = a.requestCount;
+    pool.sweepExpiredCooldowns();
+    expect(a.rateLimits.status).toBe("allowed");
+    expect(a.requestCount).toBe(before); // sweep must not consume a turn
+  });
+
+  it("clears status when claim is empty and all known windows have expired", () => {
+    const a = makeAccount("a");
+    const pastSec = Math.floor(Date.now() / 1000) - 1;
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "",
+      fiveHourReset: pastSec,
+      sevenDayReset: pastSec,
+    };
+    const pool = new TokenPool([a]);
+    pool.getNext();
+    expect(a.rateLimits.status).toBe("allowed");
+  });
+
+  it("stays rate_limited when claim is empty but one window is still in the future", () => {
+    const a = makeAccount("a");
+    const nowSec = Math.floor(Date.now() / 1000);
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      status: "rate_limited",
+      claim: "",
+      fiveHourReset: nowSec - 60,       // expired
+      sevenDayReset: nowSec + 3600,     // still active
+    };
+    const pool = new TokenPool([a, makeAccount("b")]);
+    // "a" is still limited by the 7-day window → pool skips it.
+    expect(pool.getNext().id).toBe("b");
+    expect(a.rateLimits.status).toBe("rate_limited");
+    // But the 5h util should have been zeroed by the window rollover.
+    expect(a.rateLimits.fiveHourUtil).toBe(0);
+    expect(a.rateLimits.fiveHourReset).toBe(0);
+  });
+});
+
+describe("TokenPool — user cap window rollover", () => {
+  it("returns a capped account to rotation when its window resets", () => {
+    const a = makeAccount("a");
+    a.sessionLimitPercent = 80;
+    const pastSec = Math.floor(Date.now() / 1000) - 1;
+    // Account was at 90% util (over the 80% cap) with a reset in the past.
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      fiveHourUtil: 0.9,
+      fiveHourReset: pastSec,
+    };
+    const pool = new TokenPool([a, makeAccount("b")]);
+    // Before: "a" would be skipped as overUserCap. After sweep: util → 0
+    // and "a" rejoins round-robin.
+    const ids = [pool.getNext().id, pool.getNext().id];
+    expect(ids.sort()).toEqual(["a", "b"]);
+    expect(a.rateLimits.fiveHourUtil).toBe(0);
+  });
+
+  it("keeps a capped account out when the window has not reset yet", () => {
+    const a = makeAccount("a");
+    a.sessionLimitPercent = 80;
+    const nowSec = Math.floor(Date.now() / 1000);
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      fiveHourUtil: 0.9,
+      fiveHourReset: nowSec + 3600,
+    };
+    const pool = new TokenPool([a, makeAccount("b")]);
+    expect(pool.getNext().id).toBe("b");
+    expect(a.rateLimits.fiveHourUtil).toBe(0.9); // unchanged
+  });
+
+  it("rolls over the 7-day window independently of the 5-hour window", () => {
+    const a = makeAccount("a");
+    const nowSec = Math.floor(Date.now() / 1000);
+    a.rateLimits = {
+      ...DEFAULT_RATE_LIMITS,
+      fiveHourUtil: 0.3,
+      fiveHourReset: nowSec + 60,   // 5h still active
+      sevenDayUtil: 0.99,
+      sevenDayReset: nowSec - 1,    // 7d expired
+    };
+    const pool = new TokenPool([a]);
+    pool.sweepExpiredCooldowns();
+    expect(a.rateLimits.fiveHourUtil).toBe(0.3);       // untouched
+    expect(a.rateLimits.fiveHourReset).toBe(nowSec + 60);
+    expect(a.rateLimits.sevenDayUtil).toBe(0);         // rolled over
+    expect(a.rateLimits.sevenDayReset).toBe(0);
   });
 });
 
