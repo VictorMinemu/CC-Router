@@ -104,3 +104,49 @@ Content-Type: application/json
 ```
 
 The refresh loop runs every 5 minutes and refreshes any token expiring within 10 minutes. New tokens are written atomically (write to `.tmp`, rename) to prevent file corruption.
+
+## OpenAI ChatGPT/Codex subscription tokens
+
+Codex subscription auth is a separate provider path from Claude auth. OpenAI subscription records in CC-Router are tagged with:
+
+```json
+{
+  "provider": "openai_subscription"
+}
+```
+
+These records are not loaded into the Anthropic token pool. They are used by the OpenAI Responses-compatible `/v1/responses` route and by `/v1/messages` requests that explicitly select an `openai/*` model.
+
+Recommended login:
+
+```bash
+cc-router accounts login-openai
+```
+
+This uses the Codex device-code flow documented by OpenAI's Codex app-server auth surface: CC-Router requests a one-time code from `https://auth.openai.com/api/accounts/deviceauth/usercode`, polls for authorization, exchanges the authorization code at `https://auth.openai.com/oauth/token`, and saves the resulting OpenAI subscription tokens.
+
+To add one manually for debugging:
+
+```bash
+cc-router accounts add-openai
+```
+
+The command validates the record shape and appends or replaces only the matching OpenAI account. Anthropic token refreshes preserve OpenAI records in `accounts.json`.
+
+OpenAI subscription refreshes use:
+
+```http
+POST https://auth.openai.com/oauth/token
+Content-Type: application/x-www-form-urlencoded
+```
+
+with `grant_type=refresh_token`. Refreshes are also deduplicated per account so two simultaneous requests cannot spend the same rotating refresh token at the same time.
+
+The proxy refreshes OpenAI subscription tokens in two places:
+
+- before forwarding a request when the access token expires within 10 minutes
+- in a background loop every 5 minutes while the proxy is running
+
+Successful refreshes are persisted atomically and preserve Claude account records in the same `accounts.json` file.
+
+Treat OpenAI Codex refresh tokens as account credentials. Do not copy `~/.codex/auth.json` into bug reports, commits, logs, screenshots, or shared chat threads.

@@ -18,6 +18,8 @@ export interface AccountPatch {
 export interface AccountsApi {
   /** Apply a partial update to an account. Throws on non-2xx or network error. */
   patch(id: string, patch: AccountPatch): Promise<void>;
+  /** Enable or disable every configured account for a provider. */
+  setProviderEnabled(provider: "anthropic_subscription" | "openai_subscription", enabled: boolean): Promise<void>;
   /** Remove an account by id. Throws on non-2xx or network error. */
   remove(id: string): Promise<void>;
 }
@@ -57,6 +59,9 @@ export function createAccountsApi(baseUrl: string, authToken?: string): Accounts
   return {
     patch(id, patch) {
       return send("PATCH", `/${encodeURIComponent(id)}`, patch);
+    },
+    setProviderEnabled(provider, enabled) {
+      return send("PATCH", `/providers/${encodeURIComponent(provider)}`, { enabled });
     },
     remove(id) {
       return send("DELETE", `/${encodeURIComponent(id)}`);

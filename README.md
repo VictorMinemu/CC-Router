@@ -1,7 +1,7 @@
 # CC-Router
 
-**Round-robin proxy for multiple Claude Max accounts.**  
-Distribute Claude Code requests across N subscriptions to multiply your throughput.
+**Local multi-account router for Claude Max and OpenAI ChatGPT/Codex subscriptions.**  
+Distribute Claude Code requests across Claude subscriptions, and expose an OpenAI Responses-compatible route for Codex CLI through the same proxy.
 
 [![npm](https://img.shields.io/npm/v/ai-cc-router)](https://www.npmjs.com/package/ai-cc-router)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,7 +11,9 @@ Distribute Claude Code requests across N subscriptions to multiply your throughp
 ### Features
 
 - **Round-robin token rotation** — distribute requests across 2-20 Claude Max accounts automatically
-- **Transparent proxy** — Claude Code works normally; streaming, thinking, tool use, prompt caching all pass through
+- **Multi-provider routing** — route `openai/*` models to OpenAI ChatGPT/Codex subscription accounts and Claude models to Claude subscriptions
+- **Transparent Claude proxy** — Claude Code works normally; streaming, thinking, tool use, prompt caching all pass through
+- **Codex CLI support** — configure Codex to use CC-Router as a Responses-compatible provider
 - **Automatic token refresh** — OAuth tokens are refreshed before they expire, saved atomically to disk
 - **Rate limit awareness** — detects 429/529 responses and coolsdown accounts; picks the least-loaded one
 - **Client mode** — connect to a remote CC-Router from any machine with one command (`cc-router client connect <url>`)
@@ -42,12 +44,14 @@ Claude Desktop  ─[mitmproxy]─┐  (optional — intercepts api.anthropic.com
 ┌─────────────────────────────────────┐
 │  CC-Router  :3456                   │
 │                                     │
-│  1. Receives request  /v1/messages  │
-│  2. Round-robin → picks account N   │
-│  3. Refreshes token if expiring     │
-│  4. Injects  Authorization: Bearer  │
-│  5. Forwards to Anthropic (or       │
-│     LiteLLM for advanced mode)      │
+│  1. Receives /v1/messages or        │
+│     /v1/responses                   │
+│  2. Parses model provider prefix    │
+│  3. Picks a Claude or OpenAI account│
+│  4. Refreshes token if expiring     │
+│  5. Injects Authorization: Bearer   │
+│  6. Forwards to Anthropic, OpenAI   │
+│     Codex backend, or LiteLLM       │
 └──────────────┬──────────────────────┘
                │
                ▼
@@ -56,7 +60,7 @@ Claude Desktop  ─[mitmproxy]─┐  (optional — intercepts api.anthropic.com
          OAuth token of account N)
 ```
 
-All standard Claude Code features work transparently: streaming, extended thinking, tool use, prompt caching.
+All standard Claude Code features work transparently on the Claude route: streaming, extended thinking, tool use, prompt caching. OpenAI subscription routing is available for Codex-compatible Responses requests and Claude Code cross-routing with the limitations documented below.
 
 **Claude Desktop support** is opt-in and requires a small interceptor (mitmproxy) because Claude Desktop doesn't expose a custom API endpoint setting. See [Claude Desktop support](#claude-desktop-support).
 
@@ -283,15 +287,25 @@ cc-router revert             Same as stop --full
 cc-router status             Live dashboard (updates every 2s, press q to quit)
 cc-router status --json      Print current stats as JSON and exit
 
+cc-router models list        List models discovered live from provider APIs
+cc-router models list --json Print discovered models + routing as JSON
+cc-router models set --claude-model anthropic/claude-sonnet-4-6
+cc-router models set --openai-model openai/gpt-5-codex
+
 cc-router logs               View proxy logs (background mode)
 cc-router logs -f            Follow log output in real time
 cc-router logs --lines 100   Show last 100 lines
 
 cc-router accounts list      List configured accounts (live stats if proxy is running)
 cc-router accounts add       Add an account interactively
-cc-router accounts remove <id>  Remove an account
+cc-router accounts login-openai  Sign in to OpenAI subscription auth with device code
+cc-router accounts add-openai  Add an OpenAI subscription account manually (experimental)
+cc-router accounts remove <id>  Remove a Claude or OpenAI account
 
 cc-router configure          (Re)write ~/.claude/settings.json
+cc-router configure codex    (Re)write ~/.codex/config.toml for Codex CLI
+cc-router configure codex --model openai/gpt-5-codex
+cc-router configure models --claude-model claude-sonnet-4-6 --openai-model gpt-5-codex
 cc-router configure --show   Show current Claude Code proxy settings
 cc-router configure --remove Remove cc-router settings (same as revert without stopping)
 
@@ -340,6 +354,104 @@ cc-router docker up
 ```
 
 See [docs/litellm-setup.md](docs/litellm-setup.md) for details.
+
+---
+
+## Codex CLI support (experimental)
+
+CC-Router exposes an OpenAI Responses-compatible endpoint for Codex CLI at `/v1/responses`. This lets Codex use OpenAI ChatGPT/Codex subscription accounts through the same local router that Claude Code uses for Claude subscriptions.
+
+Configure Codex:
+
+```bash
+cc-router configure codex --model openai/gpt-5-codex
+```
+
+This writes a managed provider block to `~/.codex/config.toml`:
+
+```toml
+model = "openai/gpt-5-codex"
+model_provider = "cc-router"
+
+[model_providers.cc-router]
+name = "CC-Router"
+base_url = "http://localhost:3456/v1"
+wire_api = "responses"
+env_key = "CC_ROUTER_TOKEN"
+```
+
+Configure router-side model defaults and aliases:
+
+```bash
+cc-router configure models \
+  --claude-model claude-sonnet-4-6 \
+  --openai-model gpt-5-codex
+```
+
+This writes `modelRouting` to `~/.cc-router/config.json`. It sets the Claude default, the OpenAI default, and practical aliases so `claude/sonnet`, `sonnet`, `openai/default`, and `openai/codex` resolve to the models you selected. Restart the router after changing these values.
+
+Model discovery is dynamic. `GET /v1/models` returns an OpenAI-compatible model list by querying the configured Anthropic and OpenAI subscription APIs live:
+
+```bash
+curl http://localhost:3456/v1/models
+```
+
+Results are provider-prefixed, for example `anthropic/claude-sonnet-4-6` and `openai/gpt-5-codex`. Configured aliases such as `openai/codex` are added when their upstream model is available. If one provider is temporarily unavailable, CC-Router still returns the models discovered from the other providers.
+
+Then run Codex with the proxy secret in `CC_ROUTER_TOKEN` when your router is password-protected:
+
+```bash
+CC_ROUTER_TOKEN=cc-rtr-your-secret codex -m openai/gpt-5.5
+```
+
+Model prefixes:
+
+| Prefix | Upstream |
+|--------|----------|
+| `openai/*` | OpenAI ChatGPT/Codex subscription route |
+| `claude/*` | Claude subscription route |
+| `anthropic/*` | Claude subscription route |
+
+Examples after the configuration above:
+
+| Public model | Routed upstream model |
+|--------------|----------------------|
+| `openai/codex` | `gpt-5-codex` |
+| `openai/default` | `gpt-5-codex` |
+| `claude/sonnet` | `claude-sonnet-4-6` |
+
+Claude Code can also send a `/v1/messages` request with an `openai/*` model. CC-Router translates that Anthropic Messages request into an OpenAI Responses request and converts JSON or basic text SSE responses back into Anthropic-shaped message responses.
+
+Current limitation: OpenAI-to-Anthropic streaming currently covers text deltas and final usage. Streaming tool-call normalization is still experimental.
+
+OpenAI subscription account records are separated from Claude accounts with `provider: "openai_subscription"` so they do not enter the Anthropic token pool:
+
+```json
+{
+  "id": "openai-primary",
+  "provider": "openai_subscription",
+  "accessToken": "eyJ...",
+  "refreshToken": "...",
+  "expiresAt": 1999999999000,
+  "scopes": ["openid", "profile", "email", "offline_access"]
+}
+```
+
+Recommended OpenAI subscription login:
+
+```bash
+cc-router accounts login-openai
+```
+
+This uses the Codex device-code auth flow: the CLI prints a verification URL and one-time code, you approve the login in your browser, and CC-Router saves the resulting OpenAI subscription account record.
+
+Manual account entry is also available for debugging:
+
+```bash
+cc-router accounts add-openai
+```
+
+This prompts for the OpenAI access token, refresh token, expiry timestamp, and scopes, validates the record shape, and saves it without overwriting Claude accounts.
 
 ---
 
@@ -489,6 +601,17 @@ cc-router status
 ```text
  CC-Router  ·  standalone → api.anthropic.com  ·  up 2h 14m  ·  [q] quit
 
+ OPERATIONS  base http://localhost:3456  ·  auth protected  ·  models dynamic
+  Claude 2/2 healthy  OpenAI 1/1 healthy  ·  cross-route ready
+  endpoints /v1/messages /v1/responses /v1/models /cc-router/accounts
+  routing claude=claude-sonnet-4-6 aliases[sonnet]  openai=gpt-5-codex aliases[codex]
+  models [m] list/select  change [c] Claude [o] OpenAI
+
+ MODELS  [m/r] refresh  [↑/↓] select  [c] Claude default  [o] OpenAI default
+  current claude=claude-sonnet-4-6  openai=gpt-5-codex
+  ▶ anthropic/claude-sonnet-4-6 Claude
+    openai/gpt-5-codex OpenAI
+
  ACCOUNTS  2/2 healthy
 
   ● max-account-1    ok      req   142  err   0  expires  6h 48m  last  2s ago
@@ -502,7 +625,30 @@ cc-router status
   14:22:45  ↻ max-account-1    refresh
 ```
 
-Press `q` to quit. Run with `--json` for non-interactive output.
+Press `q` to quit. Run with `--json` for non-interactive output; the JSON includes an `operational` block with capabilities, endpoints, provider readiness, auth status, and model routing. Secrets and account tokens are never included.
+
+The dashboard is also a control surface. In local mode it controls the local proxy; in client mode it controls the remote CC-Router configured by `cc-router client connect`.
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch focus between logs, accounts, and models |
+| `n` | Add a Claude account |
+| `e` | Enable/disable selected Claude account |
+| `w` / `s` | Change selected Claude account weekly/session cap |
+| `d` | Delete selected Claude account |
+| `m` / `r` | Load or refresh discovered provider models |
+| `c` | Set selected `anthropic/*` model as Claude default |
+| `o` | Set selected `openai/*` model as OpenAI default |
+
+List and change models without waiting for a package update:
+
+```bash
+cc-router models list
+cc-router models set --claude-model anthropic/claude-sonnet-4-6
+cc-router models set --openai-model openai/gpt-5-codex
+```
+
+When the proxy is running, `models set` updates the live router and persists the new defaults. If the proxy is offline, it writes the configuration for the next start.
 
 ---
 

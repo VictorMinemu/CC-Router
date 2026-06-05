@@ -3,6 +3,8 @@ import { randomBytes } from "crypto";
 import { CONFIG_DIR, ACCOUNTS_PATH, CONFIG_PATH } from "./paths.js";
 import type { Account, AccountRecord } from "../proxy/types.js";
 import { DEFAULT_RATE_LIMITS, ACCOUNT_USER_DEFAULTS, clampPercent } from "../proxy/types.js";
+import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
 
 export const DEFAULT_PROXY_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -37,14 +39,114 @@ export function readAccountsFromPath(path: string): Account[] {
 // Escritura atómica: escribe a .tmp y renombra — evita JSON corrupto si el proceso muere mid-write
 export function writeAccountsAtomic(data: unknown[]): void {
   ensureConfigDir();
-  const tmp = ACCOUNTS_PATH + ".tmp";
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, data);
+}
+
+function writeAccountsAtomicToPath(path: string, data: unknown[]): void {
+  const tmp = path + ".tmp";
   writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
-  renameSync(tmp, ACCOUNTS_PATH);
+  renameSync(tmp, path);
+}
+
+export function writeAnthropicAccountsPreservingOtherProviders(data: AccountRecord[]): void {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const nonAnthropic = existing.filter(a =>
+    a.provider !== undefined && a.provider !== "anthropic_subscription"
+  );
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, [...data, ...nonAnthropic]);
+}
+
+export function upsertAccountRecord(record: AccountRecord): void {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const next = [
+    ...existing.filter(a => !(a.id === record.id && a.provider === record.provider)),
+    record,
+  ];
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, next);
+}
+
+export function removeAccountRecordById(id: string): AccountRecord | null {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const removed = existing.find(a => a.id === id) ?? null;
+  if (!removed) return null;
+
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, existing.filter(a => a.id !== id));
+  return removed;
+}
+
+export type AccountProvider = "anthropic_subscription" | "openai_subscription";
+
+function normalizeAccountProvider(record: AccountRecord): AccountProvider {
+  return record.provider === "openai_subscription"
+    ? "openai_subscription"
+    : "anthropic_subscription";
+}
+
+export function migrateLegacyAccountProviders(path = ACCOUNTS_PATH): boolean {
+  const records = readRawFromPath(path) as AccountRecord[];
+  let changed = false;
+  const migrated = records.map(record => {
+    if (record.provider !== undefined) return record;
+    changed = true;
+    return { ...record, provider: "anthropic_subscription" as const };
+  });
+  if (changed) writeAccountsAtomicToPath(path, migrated);
+  return changed;
+}
+
+export function setProviderAccountsEnabled(
+  provider: AccountProvider,
+  enabled: boolean,
+  path = ACCOUNTS_PATH,
+): number {
+  const records = readRawFromPath(path) as AccountRecord[];
+  let changed = 0;
+  const next = records.map(record => {
+    if (normalizeAccountProvider(record) !== provider) return record;
+    changed++;
+    return { ...record, provider: normalizeAccountProvider(record), enabled };
+  });
+  if (changed > 0) writeAccountsAtomicToPath(path, next);
+  return changed;
 }
 
 /** Deserialize flat AccountRecord[] from the default path into runtime Account[] */
 export function loadAccounts(): Account[] {
   return deserialize(readAccountsRaw() as AccountRecord[]);
+}
+
+/** Load OpenAI ChatGPT/Codex subscription accounts without mixing them into the Anthropic pool. */
+export function loadOpenAIAccounts(path?: string): OpenAISubscriptionAccount[] {
+  const records = readRawFromPath(path ?? ACCOUNTS_PATH) as AccountRecord[];
+  return records
+    .filter(a => a.provider === "openai_subscription")
+    .map(a => ({
+      id: a.id,
+      provider: "openai_subscription" as const,
+      accessToken: a.accessToken,
+      refreshToken: a.refreshToken,
+      expiresAt: a.expiresAt,
+      enabled: a.enabled !== false,
+    }));
+}
+
+export function saveOpenAIAccounts(accounts: OpenAISubscriptionAccount[]): void {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const nonOpenAI = existing.filter(a => a.provider !== "openai_subscription");
+  const records: AccountRecord[] = accounts.map(a => ({
+    id: a.id,
+    provider: "openai_subscription",
+    accessToken: a.accessToken,
+    refreshToken: a.refreshToken,
+    expiresAt: a.expiresAt,
+    scopes: ["openid", "profile", "email", "offline_access"],
+    enabled: a.enabled,
+  }));
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, [...nonOpenAI, ...records]);
 }
 
 // ─── Proxy config (password, future settings) ─────────────────────────────────
@@ -86,6 +188,8 @@ export interface ProxyConfig {
   proxyRequesTime?: number;
   /** Auto-update on patch/minor releases. Default: true (enabled). Set to false to disable. */
   autoUpdate?: boolean;
+  /** Default and alias model routing for Claude and OpenAI subscription providers. */
+  modelRouting?: ModelRoutingConfig;
   /** Present only when this machine is in "client" mode (connected to a remote CC-Router) */
   client?: ClientConfig;
   /** Run preferences — asked once on first start, reused on subsequent starts */
@@ -140,7 +244,7 @@ export function generateProxySecret(): string {
 // ─── Accounts ─────────────────────────────────────────────────────────────────
 
 function deserialize(records: AccountRecord[]): Account[] {
-  return records.map(a => ({
+  return records.filter(a => a.provider === undefined || a.provider === "anthropic_subscription").map(a => ({
     id: a.id,
     tokens: {
       accessToken: a.accessToken,
@@ -170,6 +274,7 @@ function deserialize(records: AccountRecord[]): Account[] {
 export function serialize(accounts: Account[]): AccountRecord[] {
   return accounts.map(a => ({
     id: a.id,
+    provider: "anthropic_subscription",
     accessToken: a.tokens.accessToken,
     refreshToken: a.tokens.refreshToken,
     expiresAt: a.tokens.expiresAt,

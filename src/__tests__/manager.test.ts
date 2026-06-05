@@ -21,7 +21,15 @@ import {
   ensureConfigDir,
   accountsFileExists,
   writeAccountsAtomic,
+  writeAnthropicAccountsPreservingOtherProviders,
+  upsertAccountRecord,
+  removeAccountRecordById,
+  saveOpenAIAccounts,
+  migrateLegacyAccountProviders,
+  setProviderAccountsEnabled,
+  serialize,
   loadAccounts,
+  loadOpenAIAccounts,
   readAccountsFromPath,
   writeConfig,
   getProxyRequestTimeoutMs,
@@ -114,6 +122,239 @@ describe("writeAccountsAtomic", () => {
   });
 });
 
+describe("migrateLegacyAccountProviders", () => {
+  it("tags legacy providerless records as Anthropic subscription accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid"],
+      },
+    ]);
+
+    const migrated = migrateLegacyAccountProviders();
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(migrated).toBe(true);
+    expect(parsed[0]).toMatchObject({
+      id: "max-account-1",
+      provider: "anthropic_subscription",
+    });
+    expect(parsed[1].provider).toBe("openai_subscription");
+  });
+
+  it("does not rewrite already tagged accounts", () => {
+    writeAccountsAtomic([{ ...sampleRecord, provider: "anthropic_subscription" }]);
+    const before = fs.readFileSync(accountsPath(), "utf-8");
+
+    const migrated = migrateLegacyAccountProviders();
+
+    expect(migrated).toBe(false);
+    expect(fs.readFileSync(accountsPath(), "utf-8")).toBe(before);
+  });
+});
+
+describe("setProviderAccountsEnabled", () => {
+  it("updates all accounts for the selected provider while preserving the other provider", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      { ...sampleRecord, id: "max-account-2", provider: "anthropic_subscription", enabled: true },
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid"],
+        enabled: true,
+      },
+    ]);
+
+    const changed = setProviderAccountsEnabled("anthropic_subscription", false);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(changed).toBe(2);
+    expect(parsed.map((record: { id: string; enabled?: boolean }) => [record.id, record.enabled])).toEqual([
+      ["max-account-1", false],
+      ["max-account-2", false],
+      ["openai-primary", true],
+    ]);
+  });
+
+  it("treats providerless legacy accounts as Anthropic when updating provider state", () => {
+    writeAccountsAtomic([sampleRecord]);
+
+    const changed = setProviderAccountsEnabled("anthropic_subscription", false);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(changed).toBe(1);
+    expect(parsed[0]).toMatchObject({
+      provider: "anthropic_subscription",
+      enabled: false,
+    });
+  });
+});
+
+describe("writeAnthropicAccountsPreservingOtherProviders", () => {
+  it("replaces Anthropic records while preserving OpenAI subscription records", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+      },
+    ]);
+
+    writeAnthropicAccountsPreservingOtherProviders([
+      {
+        ...sampleRecord,
+        id: "max-account-updated",
+        accessToken: "sk-ant-oat01-updated",
+      },
+    ]);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed.map((record: { id: string }) => record.id)).toEqual([
+      "max-account-updated",
+      "openai-victor",
+    ]);
+    expect(parsed[1].provider).toBe("openai_subscription");
+  });
+});
+
+describe("upsertAccountRecord", () => {
+  it("adds or replaces a provider-tagged OpenAI record without changing Anthropic records", () => {
+    writeAccountsAtomic([sampleRecord]);
+
+    upsertAccountRecord({
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access",
+      refreshToken: "openai-refresh",
+      expiresAt: 1999999999000,
+      scopes: ["openid"],
+      enabled: true,
+    });
+
+    upsertAccountRecord({
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access-updated",
+      refreshToken: "openai-refresh",
+      expiresAt: 1999999999000,
+      scopes: ["openid"],
+      enabled: true,
+    });
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].id).toBe("max-account-1");
+    expect(parsed[1].accessToken).toBe("openai-access-updated");
+  });
+});
+
+describe("removeAccountRecordById", () => {
+  it("removes an OpenAI subscription record while preserving Anthropic accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid"],
+        enabled: true,
+      },
+    ]);
+
+    const removed = removeAccountRecordById("openai-primary");
+
+    expect(removed?.provider).toBe("openai_subscription");
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toEqual([sampleRecord]);
+  });
+
+  it("removes an Anthropic account while preserving OpenAI subscription records", () => {
+    const openAIRecord = {
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access",
+      refreshToken: "openai-refresh",
+      expiresAt: 1999999999000,
+      scopes: ["openid"],
+      enabled: true,
+    };
+    writeAccountsAtomic([sampleRecord, openAIRecord]);
+
+    const removed = removeAccountRecordById("max-account-1");
+
+    expect(removed?.id).toBe("max-account-1");
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toEqual([openAIRecord]);
+  });
+
+  it("returns null and leaves the file unchanged when the account is not found", () => {
+    writeAccountsAtomic([sampleRecord]);
+    const before = fs.readFileSync(accountsPath(), "utf-8");
+
+    const removed = removeAccountRecordById("missing-account");
+
+    expect(removed).toBeNull();
+    expect(fs.readFileSync(accountsPath(), "utf-8")).toBe(before);
+  });
+});
+
+describe("saveOpenAIAccounts", () => {
+  it("replaces OpenAI subscription records while preserving Anthropic accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "old-access",
+        refreshToken: "old-refresh",
+        expiresAt: 1000,
+        scopes: ["openid"],
+        enabled: true,
+      },
+    ]);
+
+    saveOpenAIAccounts([
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        expiresAt: 1999999999000,
+        enabled: false,
+      },
+    ]);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toEqual([
+      sampleRecord,
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+        enabled: false,
+      },
+    ]);
+  });
+});
+
 describe("loadAccounts", () => {
   it("returns empty array when file does not exist", () => {
     expect(loadAccounts()).toEqual([]);
@@ -146,6 +387,62 @@ describe("loadAccounts", () => {
     writeAccountsAtomic([noScopes]);
     const accounts = loadAccounts();
     expect(accounts[0].tokens.scopes).toEqual(["user:inference", "user:profile"]);
+  });
+
+  it("does not include OpenAI subscription records in the Anthropic token pool", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+      },
+    ]);
+
+    expect(loadAccounts().map(a => a.id)).toEqual(["max-account-1"]);
+  });
+});
+
+describe("serialize", () => {
+  it("persists Anthropic provider tags so legacy accounts stay migrated after save", () => {
+    writeAccountsAtomic([sampleRecord]);
+    const [account] = loadAccounts();
+
+    writeAnthropicAccountsPreservingOtherProviders(serialize([account]));
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed[0].provider).toBe("anthropic_subscription");
+  });
+});
+
+describe("loadOpenAIAccounts", () => {
+  it("loads OpenAI subscription records separately from Anthropic accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+        enabled: true,
+      },
+    ]);
+
+    expect(loadOpenAIAccounts()).toEqual([
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        enabled: true,
+      },
+    ]);
   });
 });
 
@@ -196,5 +493,24 @@ describe("getProxyRequestTimeoutMs", () => {
     const parsed = JSON.parse(fs.readFileSync(`${MOCK_DIR}/config.json`, "utf-8"));
     expect(parsed.proxyRequestTimeoutMs).toBe(180_000);
     expect(parsed.proxyRequesTime).toBeUndefined();
+  });
+
+  it("persists model routing defaults and aliases", () => {
+    writeConfig({
+      modelRouting: {
+        anthropicDefaultModel: "claude-sonnet-4-6",
+        openAIDefaultModel: "gpt-5-codex",
+        anthropicAliases: { "claude/sonnet": "claude-sonnet-4-6" },
+        openAIAliases: { codex: "gpt-5-codex" },
+      },
+    });
+
+    const parsed = JSON.parse(fs.readFileSync(`${MOCK_DIR}/config.json`, "utf-8"));
+    expect(parsed.modelRouting).toEqual({
+      anthropicDefaultModel: "claude-sonnet-4-6",
+      openAIDefaultModel: "gpt-5-codex",
+      anthropicAliases: { "claude/sonnet": "claude-sonnet-4-6" },
+      openAIAliases: { codex: "gpt-5-codex" },
+    });
   });
 });

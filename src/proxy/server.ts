@@ -7,7 +7,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool, EmptyPoolError } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, writeConfig, serialize, getProxyRequestTimeoutMs, migrateLegacyAccountProviders, setProviderAccountsEnabled } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
@@ -17,6 +17,13 @@ import type { LogEntry } from "./stats.js";
 import { PROXY_PORT, LITELLM_URL } from "../config/paths.js";
 import { writePid, removePid } from "../daemon/pid.js";
 import type { Account, AccountRateLimits, AccountRecord } from "./types.js";
+import { createOpenAIAccountPicker } from "../providers/openai/account-pool.js";
+import { prepareOpenAIAccountForRequest, startOpenAIRefreshLoop } from "../providers/openai/token-refresher.js";
+import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
+import { mountResponsesRoutes } from "./responses-server.js";
+import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
+import { mountModelsRoute } from "./models-server.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
 import chalk from "chalk";
 
 // Augment Request to carry the selected account and pending log entry
@@ -33,6 +40,154 @@ export interface ServerOptions {
   /** Forward to LiteLLM. If not set, goes directly to Anthropic. */
   litellmUrl?: string;
   accountsPath?: string;
+}
+
+export interface HealthAccountView {
+  id: string;
+  provider: "anthropic_subscription" | "openai_subscription";
+  enabled: boolean;
+  healthy: boolean;
+  busy: boolean;
+  requestCount: number;
+  errorCount: number;
+  expiresInMs: number;
+  lastUsedMs: number;
+  lastRefreshMs: number;
+  rateLimits?: AccountRateLimits;
+  sessionLimitPercent?: number;
+  weeklyLimitPercent?: number;
+}
+
+export interface OperationalStatus {
+  mode: string;
+  target: string;
+  auth: { required: boolean };
+  providers: {
+    anthropic: ProviderOperationalStatus;
+    openai: ProviderOperationalStatus;
+  };
+  endpoints: {
+    health: string;
+    accounts: string;
+    messages: string;
+    responses: string;
+    models: string;
+  };
+  routing: {
+    anthropicDefaultModel?: string;
+    openAIDefaultModel?: string;
+    anthropicAliases: string[];
+    openAIAliases: string[];
+  };
+  capabilities: {
+    anthropicMessages: boolean;
+    openAIResponses: boolean;
+    crossProviderMessages: boolean;
+    dynamicModels: boolean;
+    accountManagement: boolean;
+  };
+}
+
+export interface ProviderOperationalStatus {
+  configured: boolean;
+  accounts: number;
+  healthy: number;
+  enabled: number;
+}
+
+export function createOperationalStatus(opts: {
+  mode: string;
+  target: string;
+  authRequired: boolean;
+  accounts: HealthAccountView[];
+  modelRouting?: ModelRoutingConfig;
+}): OperationalStatus {
+  const anthropicAccounts = opts.accounts.filter(a => a.provider === "anthropic_subscription");
+  const openAIAccounts = opts.accounts.filter(a => a.provider === "openai_subscription");
+  const modelRouting = opts.modelRouting ?? {};
+
+  return {
+    mode: opts.mode,
+    target: opts.target,
+    auth: { required: opts.authRequired },
+    providers: {
+      anthropic: providerStatus(anthropicAccounts),
+      openai: providerStatus(openAIAccounts),
+    },
+    endpoints: {
+      health: "/cc-router/health",
+      accounts: "/cc-router/accounts",
+      messages: "/v1/messages",
+      responses: "/v1/responses",
+      models: "/v1/models",
+    },
+    routing: {
+      anthropicDefaultModel: modelRouting.anthropicDefaultModel,
+      openAIDefaultModel: modelRouting.openAIDefaultModel,
+      anthropicAliases: Object.keys(modelRouting.anthropicAliases ?? {}).sort(),
+      openAIAliases: Object.keys(modelRouting.openAIAliases ?? {}).sort(),
+    },
+    capabilities: {
+      anthropicMessages: anthropicAccounts.length > 0,
+      openAIResponses: openAIAccounts.length > 0,
+      crossProviderMessages: openAIAccounts.length > 0,
+      dynamicModels: true,
+      accountManagement: true,
+    },
+  };
+}
+
+export function createHealthAccountViews(
+  anthropicAccounts: Account[],
+  openAIAccounts: OpenAISubscriptionAccount[],
+): HealthAccountView[] {
+  return [
+    ...anthropicAccounts.map(publicAnthropicAccountView),
+    ...openAIAccounts.map(publicOpenAIAccountView),
+  ];
+}
+
+function publicAnthropicAccountView(a: Account): HealthAccountView {
+  return {
+    id: a.id,
+    provider: "anthropic_subscription",
+    enabled: a.enabled,
+    sessionLimitPercent: a.sessionLimitPercent,
+    weeklyLimitPercent: a.weeklyLimitPercent,
+    healthy: a.enabled !== false && a.healthy,
+    busy: a.busy,
+    requestCount: a.requestCount,
+    errorCount: a.errorCount,
+    expiresInMs: a.tokens.expiresAt - Date.now(),
+    lastUsedMs: a.lastUsed,
+    lastRefreshMs: a.lastRefresh,
+    rateLimits: a.rateLimits,
+  };
+}
+
+function publicOpenAIAccountView(a: OpenAISubscriptionAccount): HealthAccountView {
+  const expiresInMs = a.expiresAt - Date.now();
+  return {
+    id: a.id,
+    provider: "openai_subscription",
+    enabled: a.enabled !== false,
+    healthy: a.enabled !== false && expiresInMs > 0,
+    busy: false,
+    requestCount: 0,
+    errorCount: 0,
+    expiresInMs,
+    lastUsedMs: 0,
+    lastRefreshMs: 0,
+  };
+}
+
+function providerStatus(accounts: HealthAccountView[]): ProviderOperationalStatus {
+  return {
+    configured: accounts.length > 0,
+    accounts: accounts.length,
+    healthy: accounts.filter(a => a.healthy).length,
+    enabled: accounts.filter(a => a.enabled !== false).length,
+  };
 }
 
 // Mutates entry and updates aggregate counters with token usage from Anthropic's
@@ -99,14 +254,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     process.exit(1);
   }
 
+  migrateLegacyAccountProviders(accountsPath);
   const accounts = accountsPath ? readAccountsFromPath(accountsPath) : loadAccounts();
-  if (accounts.length === 0) {
+  const openAIAccounts = loadOpenAIAccounts(accountsPath);
+  if (accounts.length === 0 && openAIAccounts.length === 0) {
     console.error(chalk.red("\n✗ No accounts found in accounts.json."));
     console.error(chalk.yellow("  Run: cc-router setup\n"));
     process.exit(1);
   }
 
   const pool = new TokenPool(accounts);
+  const pickOpenAIAccount = createOpenAIAccountPicker(openAIAccounts);
+  const initialConfig = readConfig();
+  const modelRouting = initialConfig.modelRouting ?? {};
 
   // Log when the pool falls back to a capped account — makes the cap bypass
   // visible in the dashboard's "RECENT ACTIVITY" instead of being silent.
@@ -124,6 +284,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   };
 
   startRefreshLoop(accounts);
+  startOpenAIRefreshLoop(openAIAccounts, saveOpenAIAccounts);
 
   const app = express();
   const proxyRequestTimeoutMs = getProxyRequestTimeoutMs();
@@ -134,7 +295,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   //   OR "x-api-key: <secret>" (Claude Desktop via mitmproxy, Anthropic SDK)
   // The /cc-router/health endpoint is always exempt so monitoring and PM2
   // healthchecks keep working.
-  const { proxySecret } = readConfig();
+  const { proxySecret } = initialConfig;
   if (proxySecret) {
     const secretBuf = Buffer.from(proxySecret, "utf-8");
     app.use((req, res, next) => {
@@ -165,10 +326,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Sweep expired cooldowns on each poll so the dashboard reflects recovery
     // even during idle periods when no /v1 request would trigger getNext().
     pool.sweepExpiredCooldowns();
+    const accountViews = createHealthAccountViews(pool.getAll(), openAIAccounts);
     res.json({
-      status: pool.getHealthy().length > 0 ? "ok" : "degraded",
+      status: accountViews.some(a => a.healthy) ? "ok" : "degraded",
       mode,
       target,
+      operational: createOperationalStatus({
+        mode,
+        target,
+        authRequired: Boolean(proxySecret),
+        accounts: accountViews,
+        modelRouting,
+      }),
       uptime: stats.getUptimeSeconds(),
       totalRequests: stats.totalRequests,
       totalErrors: stats.totalErrors,
@@ -177,7 +346,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       totalCacheCreationTokens: stats.totalCacheCreationTokens,
       totalInputTokens: stats.totalInputTokens,
       totalOutputTokens: stats.totalOutputTokens,
-      accounts: pool.getStats(),
+      accounts: accountViews,
       recentLogs: stats.getRecentLogs(50),
     });
   });
@@ -190,23 +359,61 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   accountsRouter.use(express.json({ limit: "32kb" }));
 
   // Shape returned to clients — NEVER includes access/refresh tokens.
-  const publicAccountView = (a: Account) => ({
-    id: a.id,
-    enabled: a.enabled,
-    sessionLimitPercent: a.sessionLimitPercent,
-    weeklyLimitPercent: a.weeklyLimitPercent,
-    healthy: a.healthy,
-    busy: a.busy,
-    requestCount: a.requestCount,
-    errorCount: a.errorCount,
-    expiresInMs: a.tokens.expiresAt - Date.now(),
-    lastUsedMs: a.lastUsed,
-    lastRefreshMs: a.lastRefresh,
-    rateLimits: a.rateLimits,
+  accountsRouter.get("/", (_req, res) => {
+    res.json({ accounts: createHealthAccountViews(pool.getAll(), openAIAccounts) });
   });
 
-  accountsRouter.get("/", (_req, res) => {
-    res.json({ accounts: pool.getAll().map(publicAccountView) });
+  accountsRouter.patch("/providers/:provider", (req, res) => {
+    const providerParam = req.params.provider;
+    if (providerParam !== "anthropic_subscription" && providerParam !== "openai_subscription") {
+      res.status(400).json({ error: "provider must be anthropic_subscription or openai_subscription" });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { enabled?: unknown };
+    if (typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be boolean" });
+      return;
+    }
+
+    const provider = providerParam;
+    const snapshots = {
+      anthropic: pool.getAll().map(a => ({ id: a.id, enabled: a.enabled })),
+      openai: openAIAccounts.map(a => ({ id: a.id, enabled: a.enabled })),
+    };
+
+    const applyRuntime = (enabled: boolean) => {
+      if (provider === "anthropic_subscription") {
+        for (const account of pool.getAll()) {
+          pool.updateAccount(account.id, { enabled });
+        }
+      } else {
+        for (const account of openAIAccounts) {
+          account.enabled = enabled;
+        }
+      }
+    };
+
+    const rollback = () => {
+      for (const snapshot of snapshots.anthropic) {
+        pool.updateAccount(snapshot.id, { enabled: snapshot.enabled });
+      }
+      for (const snapshot of snapshots.openai) {
+        const account = openAIAccounts.find(a => a.id === snapshot.id);
+        if (account) account.enabled = snapshot.enabled;
+      }
+    };
+
+    applyRuntime(body.enabled);
+    try {
+      const changed = setProviderAccountsEnabled(provider, body.enabled, accountsPath);
+      res.json({ provider, enabled: body.enabled, changed });
+    } catch (err) {
+      rollback();
+      const message = err instanceof Error ? err.message : String(err);
+      logError("accounts", 0, `Failed to persist provider state: ${message}`);
+      res.status(500).json({ error: `Failed to persist accounts.json: ${message}` });
+    }
   });
 
   /**
@@ -278,7 +485,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       res.status(500).json({ error: `Failed to persist accounts.json: ${result.message}` });
       return;
     }
-    res.json({ account: publicAccountView(updated) });
+    res.json({ account: publicAnthropicAccountView(updated) });
   });
 
   accountsRouter.post("/", (req, res) => {
@@ -326,7 +533,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       res.status(500).json({ error: `Failed to persist accounts.json: ${result.message}` });
       return;
     }
-    res.status(201).json({ account: publicAccountView(added) });
+    res.status(201).json({ account: publicAnthropicAccountView(added) });
   });
 
   accountsRouter.delete("/:id", (req, res) => {
@@ -362,6 +569,32 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   app.use("/cc-router/accounts", accountsRouter);
+
+  mountModelsRoute(app, {
+    getAnthropicAccounts: () => pool.getAll(),
+    getOpenAIAccounts: () => openAIAccounts,
+    getModelRouting: () => modelRouting,
+    setModelRouting: async (next) => {
+      Object.keys(modelRouting).forEach(key => {
+        delete modelRouting[key as keyof typeof modelRouting];
+      });
+      Object.assign(modelRouting, next);
+      writeConfig({ ...readConfig(), modelRouting: next });
+    },
+    prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
+  });
+
+  mountResponsesRoutes(app, {
+    getOpenAIAccount: pickOpenAIAccount,
+    prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
+    modelRouting,
+  });
+
+  mountMessagesCrossProviderRoute(app, {
+    getOpenAIAccount: pickOpenAIAccount,
+    prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
+    modelRouting,
+  });
 
   // ─── Proxy middleware ──────────────────────────────────────────────────────
   // IMPORTANT: selfHandleResponse must be false (default) for SSE streaming to
@@ -406,6 +639,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         //   anthropic-version         — required by Anthropic API
         //   X-Claude-Code-Session-Id  — session aggregation header sent by Claude Code
         //   content-type              — always application/json
+        if ((req as Request)._ccRawBody) {
+          proxyReq.setHeader("content-length", Buffer.byteLength((req as Request)._ccRawBody!));
+          proxyReq.write((req as Request)._ccRawBody);
+        }
       },
 
       proxyRes: (proxyRes, req) => {
@@ -584,6 +821,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     if (needsRefresh(account)) {
       const ok = await refreshAccountToken(account);
       if (ok) saveAccounts(pool.getAll());
+      if (!ok) {
+        stats.totalErrors++;
+        logError(account.id, 401, "Token refresh failed");
+        res.status(401).json({
+          type: "error",
+          error: {
+            type: "authentication_error",
+            message: "Anthropic subscription token refresh failed",
+          },
+        });
+        return;
+      }
     }
 
     req._ccAccount = account;
@@ -668,7 +917,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       writePid(process.pid);
     }
 
-    logStartup(port, host, mode, target, accounts.length);
+    const totalAccountCount = accounts.length + openAIAccounts.length;
+    logStartup(port, host, mode, target, {
+      anthropic: accounts.length,
+      openai: openAIAccounts.length,
+    });
     if (autoUpdate) console.log(chalk.gray("  Auto-update: enabled (patch/minor)"));
 
     // Anonymous telemetry — fire-and-forget, never blocks proxy startup.
@@ -680,10 +933,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         void trackEvent("app_started", { first_run: true });
       }
       void trackEvent("proxy_started", {
-        account_count: accounts.length,
+        account_count: totalAccountCount,
         mode,
       });
-      startHeartbeat(accounts.length);
+      startHeartbeat(totalAccountCount);
     } catch {
       // never let telemetry break the proxy
     }

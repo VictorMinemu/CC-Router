@@ -26,15 +26,26 @@ export function logError(accountId: string, status: number, message: string): vo
   console.log(chalk.red(`[${ts()}] [ERROR] ${accountId}:${statusStr} ${message}`));
 }
 
-export function logStartup(port: number, host: string, mode: string, target: string, accountCount: number): void {
+export interface StartupAccountCounts {
+  anthropic: number;
+  openai: number;
+}
+
+function formatStartupAccountCounts(counts: StartupAccountCounts): string {
+  const total = counts.anthropic + counts.openai;
+  return `${total} (Claude ${counts.anthropic}, OpenAI ${counts.openai})`;
+}
+
+export function logStartup(port: number, host: string, mode: string, target: string, accountCounts: StartupAccountCounts): void {
   const listen = host === "127.0.0.1" ? `http://localhost:${port}` : `http://${host}:${port}`;
+  const accounts = formatStartupAccountCounts(accountCounts);
   console.log(chalk.cyan(`
 ╔══════════════════════════════════════════════╗
 ║  CC-Router                                   ║
 ║  Listening: ${listen.padEnd(33)}║
 ║  Mode     : ${mode.padEnd(33)}║
 ║  Target   : ${target.slice(0, 33).padEnd(33)}║
-║  Accounts : ${String(accountCount).padEnd(33)}║
+║  Accounts : ${accounts.padEnd(33)}║
 ╚══════════════════════════════════════════════╝
 `));
 }

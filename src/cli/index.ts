@@ -11,6 +11,7 @@ import { registerUpdate } from "./cmd-update.js";
 import { registerClient } from "./cmd-client.js";
 import { registerTelemetry } from "./cmd-telemetry.js";
 import { registerLogs } from "./cmd-logs.js";
+import { registerModels } from "./cmd-models.js";
 import { getCurrentVersion, checkForUpdate, printUpdateBanner } from "../utils/self-update.js";
 
 const program = new Command();
@@ -30,6 +31,7 @@ Examples:
   $ cc-router start --reconfigure# Re-ask run preferences
   $ cc-router stop               # Stop proxy (offers to remove auto-start / config)
   $ cc-router status             # Live dashboard with account stats
+  $ cc-router models list        # List dynamically discovered provider models
   $ cc-router logs               # View proxy logs (background mode)
   $ cc-router accounts list      # Show all configured accounts
   $ cc-router revert             # Restore Claude Code to normal (remove all proxy config)
@@ -42,6 +44,7 @@ registerStart(program);
 registerStop(program);
 registerRevert(program);
 registerStatus(program);
+registerModels(program);
 registerAccounts(program);
 registerConfigure(program);
 registerDocker(program);

@@ -118,6 +118,21 @@ describe("refreshAccountToken", () => {
     expect(account.consecutiveErrors).toBe(1);
   });
 
+  it("marks account unhealthy immediately when OAuth refresh is rejected", async () => {
+    const account = makeAccount(Date.now() + 5 * 60 * 1000);
+
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      text: async () => "invalid_grant",
+    } as Response);
+
+    const result = await refreshAccountToken(account);
+
+    expect(result).toBe(false);
+    expect(account.healthy).toBe(false);
+  });
+
   it("marks account unhealthy after 3 consecutive errors", async () => {
     const account = makeAccount(Date.now() + 5 * 60 * 1000);
 

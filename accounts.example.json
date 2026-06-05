@@ -12,5 +12,14 @@
     "refreshToken": "sk-ant-ort01-REPLACE_ME",
     "expiresAt": 1748658860000,
     "scopes": ["user:inference", "user:profile"]
+  },
+  {
+    "id": "openai-account-1",
+    "provider": "openai_subscription",
+    "accessToken": "OPENAI_ACCESS_TOKEN_REPLACE_ME",
+    "refreshToken": "OPENAI_REFRESH_TOKEN_REPLACE_ME",
+    "expiresAt": 1748658860000,
+    "scopes": ["openid", "profile", "email", "offline_access"],
+    "enabled": true
   }
 ]

@@ -1,0 +1,292 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import express from "express";
+import { createServer } from "http";
+import { forwardOpenAICodexResponse, toCodexBackendRequest } from "../providers/openai/codex-transport.js";
+import { mountResponsesRoutes } from "../proxy/responses-server.js";
+import type { OpenAIResponsesRequest } from "../protocol/openai-responses-types.js";
+
+describe("forwardOpenAICodexResponse", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("forwards Responses requests to the ChatGPT Codex backend with account bearer token", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{\"id\":\"resp_1\"}", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+
+    const upstream = await forwardOpenAICodexResponse({
+      account: {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      },
+      body: { model: "gpt-5.5", input: [] },
+      stream: false,
+    });
+
+    expect(upstream.status).toBe(200);
+    expect(await upstream.text()).toBe("{\"id\":\"resp_1\"}");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://chatgpt.com/backend-api/codex/responses",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer access",
+          "content-type": "application/json",
+        }),
+      }),
+    );
+  });
+
+  it("marks ChatGPT Codex streaming responses as text/event-stream when upstream omits content-type", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("event: response.completed\ndata: {}\n\n", {
+      status: 200,
+    }));
+
+    const upstream = await forwardOpenAICodexResponse({
+      account: {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      },
+      body: { model: "gpt-5.5", input: [] },
+      stream: false,
+    });
+
+    expect(upstream.headers.get("content-type")).toBe("text/event-stream");
+  });
+});
+
+describe("toCodexBackendRequest", () => {
+  it("adds ChatGPT Codex backend required fields and strips unsupported output caps", () => {
+    expect(toCodexBackendRequest({
+      model: "gpt-5.4-mini",
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      max_output_tokens: 32,
+    })).toEqual({
+      model: "gpt-5.4-mini",
+      instructions: "You are a concise coding assistant.",
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      store: false,
+      stream: true,
+    });
+  });
+});
+
+describe("mountResponsesRoutes", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("accepts Codex Responses requests and strips the openai model prefix before forwarding", async () => {
+    const forwardedBodies: OpenAIResponsesRequest[] = [];
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      }),
+      forwardOpenAI: async ({ body }) => {
+        forwardedBodies.push(body);
+        return new Response(JSON.stringify({ id: "resp_1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/gpt-5.5",
+          input: [
+            { role: "user", content: [{ type: "input_text", text: "hi" }] },
+          ],
+          stream: false,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ id: "resp_1" });
+      expect(forwardedBodies).toEqual([
+        {
+          model: "gpt-5.5",
+          input: [
+            { role: "user", content: [{ type: "input_text", text: "hi" }] },
+          ],
+          stream: false,
+        },
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
+
+  it("applies configured OpenAI model aliases before forwarding Responses requests", async () => {
+    const forwardedBodies: OpenAIResponsesRequest[] = [];
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      modelRouting: { openAIAliases: { codex: "gpt-5-codex" } },
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      }),
+      forwardOpenAI: async ({ body }) => {
+        forwardedBodies.push(body);
+        return new Response(JSON.stringify({ id: "resp_1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/codex", input: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(forwardedBodies[0].model).toBe("gpt-5-codex");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
+
+  it("refreshes the selected OpenAI account before forwarding", async () => {
+    const prepare = vi.fn().mockResolvedValue(true);
+    const forward = vi.fn().mockResolvedValue(new Response("{}", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60_000,
+        enabled: true,
+      }),
+      prepareOpenAIAccount: prepare,
+      forwardOpenAI: forward,
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/gpt-5.5", input: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(forward).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
+
+  it("streams upstream Responses SSE chunks without waiting for the full body", async () => {
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      }),
+      forwardOpenAI: async () => new Response(
+        new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode("data: {\"type\":\"response.created\"}\n\n"));
+            setTimeout(() => {
+              controller.enqueue(encoder.encode("data: {\"type\":\"response.completed\"}\n\n"));
+              controller.close();
+            }, 100);
+          },
+        }) as BodyInit,
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await Promise.race([
+        fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "openai/gpt-5.5", input: [], stream: true }),
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("response headers were buffered")), 50)),
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("response body is missing");
+
+      const firstChunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("first chunk was buffered")), 50)),
+      ]);
+      expect(new TextDecoder().decode(firstChunk.value)).toContain("response.created");
+      await reader.cancel();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
+});
