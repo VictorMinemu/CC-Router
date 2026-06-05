@@ -105,6 +105,50 @@ describe("mountResponsesRoutes", () => {
     }
   });
 
+  it("applies configured OpenAI model aliases before forwarding Responses requests", async () => {
+    const forwardedBodies: OpenAIResponsesRequest[] = [];
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      modelRouting: { openAIAliases: { codex: "gpt-5-codex" } },
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      }),
+      forwardOpenAI: async ({ body }) => {
+        forwardedBodies.push(body);
+        return new Response(JSON.stringify({ id: "resp_1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/codex", input: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(forwardedBodies[0].model).toBe("gpt-5-codex");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
+
   it("refreshes the selected OpenAI account before forwarding", async () => {
     const prepare = vi.fn().mockResolvedValue(true);
     const forward = vi.fn().mockResolvedValue(new Response("{}", {

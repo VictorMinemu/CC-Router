@@ -1,6 +1,7 @@
 import type { AnthropicContent, AnthropicMessagesRequest } from "./anthropic-types.js";
 import type { OpenAIInputContent, OpenAIResponsesRequest } from "./openai-responses-types.js";
 import { parseModelRef } from "./model-ref.js";
+import type { ModelRoutingConfig } from "./model-ref.js";
 
 function stringifySystem(system: AnthropicMessagesRequest["system"]): string | undefined {
   if (system === undefined) return undefined;
@@ -32,8 +33,11 @@ function contentToOpenAI(content: AnthropicContent): OpenAIInputContent[] {
   });
 }
 
-export function anthropicToOpenAIResponses(req: AnthropicMessagesRequest): OpenAIResponsesRequest {
-  const parsed = parseModelRef(req.model);
+export function anthropicToOpenAIResponses(
+  req: AnthropicMessagesRequest,
+  modelRouting: ModelRoutingConfig = {},
+): OpenAIResponsesRequest {
+  const parsed = parseModelRef(req.model, modelRouting);
   return {
     model: parsed.upstreamModel,
     instructions: stringifySystem(req.system),

@@ -4,6 +4,7 @@ import { selectRoute } from "../providers/route-selector.js";
 import { forwardOpenAICodexResponse } from "../providers/openai/codex-transport.js";
 import type { OpenAIResponsesRequest } from "../protocol/openai-responses-types.js";
 import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
 
 type ForwardOpenAI = typeof forwardOpenAICodexResponse;
 
@@ -11,6 +12,7 @@ export interface ResponsesRoutesOptions {
   getOpenAIAccount: () => OpenAISubscriptionAccount | null;
   prepareOpenAIAccount?: (account: OpenAISubscriptionAccount) => Promise<boolean>;
   forwardOpenAI?: ForwardOpenAI;
+  modelRouting?: ModelRoutingConfig;
 }
 
 function isResponsesRequest(value: unknown): value is OpenAIResponsesRequest {
@@ -64,7 +66,7 @@ export function mountResponsesRoutes(app: Express, opts: ResponsesRoutesOptions)
       return;
     }
 
-    const route = selectRoute(req.body.model);
+    const route = selectRoute(req.body.model, opts.modelRouting);
     if (route.provider !== "openai_subscription") {
       res.status(501).json({
         error: {

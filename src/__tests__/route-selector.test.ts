@@ -17,4 +17,13 @@ describe("selectRoute", () => {
     expect(route.provider).toBe("anthropic_subscription");
     expect(route.upstreamModel).toBe("claude-sonnet-4-5");
   });
+
+  it("applies configured model aliases during route selection", () => {
+    const route = selectRoute("openai/codex", {
+      openAIAliases: { codex: "gpt-5-codex" },
+    });
+
+    expect(route.provider).toBe("openai_subscription");
+    expect(route.upstreamModel).toBe("gpt-5-codex");
+  });
 });

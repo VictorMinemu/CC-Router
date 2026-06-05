@@ -174,6 +174,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   const pool = new TokenPool(accounts);
   const pickOpenAIAccount = createOpenAIAccountPicker(openAIAccounts);
+  const initialConfig = readConfig();
+  const modelRouting = initialConfig.modelRouting ?? {};
 
   // Log when the pool falls back to a capped account — makes the cap bypass
   // visible in the dashboard's "RECENT ACTIVITY" instead of being silent.
@@ -202,7 +204,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   //   OR "x-api-key: <secret>" (Claude Desktop via mitmproxy, Anthropic SDK)
   // The /cc-router/health endpoint is always exempt so monitoring and PM2
   // healthchecks keep working.
-  const { proxySecret } = readConfig();
+  const { proxySecret } = initialConfig;
   if (proxySecret) {
     const secretBuf = Buffer.from(proxySecret, "utf-8");
     app.use((req, res, next) => {
@@ -420,11 +422,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   mountResponsesRoutes(app, {
     getOpenAIAccount: pickOpenAIAccount,
     prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
+    modelRouting,
   });
 
   mountMessagesCrossProviderRoute(app, {
     getOpenAIAccount: pickOpenAIAccount,
     prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
+    modelRouting,
   });
 
   // ─── Proxy middleware ──────────────────────────────────────────────────────

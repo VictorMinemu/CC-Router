@@ -84,6 +84,59 @@ describe("mountMessagesCrossProviderRoute", () => {
     }
   });
 
+  it("applies configured OpenAI aliases when Claude Code cross-routes to OpenAI", async () => {
+    const forwardedBodies: OpenAIResponsesRequest[] = [];
+    const app = express();
+
+    mountMessagesCrossProviderRoute(app, {
+      modelRouting: { openAIAliases: { codex: "gpt-5-codex" } },
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      }),
+      forwardOpenAI: async ({ body }) => {
+        forwardedBodies.push(body);
+        return new Response(JSON.stringify({
+          id: "resp_1",
+          model: "gpt-5-codex",
+          output: [],
+          usage: {},
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/codex",
+          max_tokens: 128,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(forwardedBodies[0].model).toBe("gpt-5-codex");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
+
   it("refreshes the selected OpenAI account before Claude Code cross-routing", async () => {
     const prepare = vi.fn().mockResolvedValue(true);
     const forward = vi.fn().mockResolvedValue(new Response(JSON.stringify({

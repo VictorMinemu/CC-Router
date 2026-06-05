@@ -62,4 +62,23 @@ describe("writeCodexRouterConfig", () => {
     expect(written).not.toContain("http://localhost:9999/v1");
     expect(written.match(/# cc-router:start/g)).toHaveLength(1);
   });
+
+  it("writes the selected Codex model into the managed block", () => {
+    const writeFileSync = vi.fn();
+
+    writeCodexRouterConfig({
+      homeDir: "/tmp/home",
+      baseUrl: "http://localhost:3456/v1",
+      tokenEnvKey: "CC_ROUTER_TOKEN",
+      defaultModel: "openai/gpt-5-codex",
+      fs: {
+        existsSync: () => false,
+        readFileSync: () => "",
+        writeFileSync,
+        mkdirSync: vi.fn(),
+      },
+    });
+
+    expect(writeFileSync.mock.calls[0][1]).toContain("model = \"openai/gpt-5-codex\"");
+  });
 });

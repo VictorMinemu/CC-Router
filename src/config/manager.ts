@@ -4,6 +4,7 @@ import { CONFIG_DIR, ACCOUNTS_PATH, CONFIG_PATH } from "./paths.js";
 import type { Account, AccountRecord } from "../proxy/types.js";
 import { DEFAULT_RATE_LIMITS, ACCOUNT_USER_DEFAULTS, clampPercent } from "../proxy/types.js";
 import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
 
 export const DEFAULT_PROXY_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -151,6 +152,8 @@ export interface ProxyConfig {
   proxyRequesTime?: number;
   /** Auto-update on patch/minor releases. Default: true (enabled). Set to false to disable. */
   autoUpdate?: boolean;
+  /** Default and alias model routing for Claude and OpenAI subscription providers. */
+  modelRouting?: ModelRoutingConfig;
   /** Present only when this machine is in "client" mode (connected to a remote CC-Router) */
   client?: ClientConfig;
   /** Run preferences — asked once on first start, reused on subsequent starts */

@@ -16,6 +16,7 @@ export interface WriteCodexRouterConfigOptions {
   homeDir?: string;
   baseUrl: string;
   tokenEnvKey?: string;
+  defaultModel?: string;
   fs?: CodexConfigFs;
 }
 
@@ -23,9 +24,10 @@ export interface WriteCodexRouterConfigResult {
   path: string;
 }
 
-function managedBlock(baseUrl: string, tokenEnvKey: string): string {
+function managedBlock(baseUrl: string, tokenEnvKey: string, defaultModel?: string): string {
   return [
     START,
+    ...(defaultModel ? [`model = "${defaultModel}"`] : []),
     "model_provider = \"cc-router\"",
     "",
     "[model_providers.cc-router]",
@@ -61,7 +63,7 @@ export function writeCodexRouterConfig(opts: WriteCodexRouterConfigOptions): Wri
   const existing = fs.existsSync(configPath)
     ? fs.readFileSync(configPath, "utf-8")
     : "";
-  const next = replaceManagedBlock(existing, managedBlock(opts.baseUrl, tokenEnvKey));
+  const next = replaceManagedBlock(existing, managedBlock(opts.baseUrl, tokenEnvKey, opts.defaultModel));
   fs.writeFileSync(configPath, next, "utf-8");
 
   return { path: configPath };

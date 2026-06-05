@@ -402,4 +402,23 @@ describe("getProxyRequestTimeoutMs", () => {
     expect(parsed.proxyRequestTimeoutMs).toBe(180_000);
     expect(parsed.proxyRequesTime).toBeUndefined();
   });
+
+  it("persists model routing defaults and aliases", () => {
+    writeConfig({
+      modelRouting: {
+        anthropicDefaultModel: "claude-sonnet-4-6",
+        openAIDefaultModel: "gpt-5-codex",
+        anthropicAliases: { "claude/sonnet": "claude-sonnet-4-6" },
+        openAIAliases: { codex: "gpt-5-codex" },
+      },
+    });
+
+    const parsed = JSON.parse(fs.readFileSync(`${MOCK_DIR}/config.json`, "utf-8"));
+    expect(parsed.modelRouting).toEqual({
+      anthropicDefaultModel: "claude-sonnet-4-6",
+      openAIDefaultModel: "gpt-5-codex",
+      anthropicAliases: { "claude/sonnet": "claude-sonnet-4-6" },
+      openAIAliases: { codex: "gpt-5-codex" },
+    });
+  });
 });

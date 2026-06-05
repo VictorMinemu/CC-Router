@@ -299,6 +299,8 @@ cc-router accounts remove <id>  Remove a Claude or OpenAI account
 
 cc-router configure          (Re)write ~/.claude/settings.json
 cc-router configure codex    (Re)write ~/.codex/config.toml for Codex CLI
+cc-router configure codex --model openai/gpt-5-codex
+cc-router configure models --claude-model claude-sonnet-4-6 --openai-model gpt-5-codex
 cc-router configure --show   Show current Claude Code proxy settings
 cc-router configure --remove Remove cc-router settings (same as revert without stopping)
 
@@ -357,12 +359,13 @@ CC-Router exposes an OpenAI Responses-compatible endpoint for Codex CLI at `/v1/
 Configure Codex:
 
 ```bash
-cc-router configure codex
+cc-router configure codex --model openai/gpt-5-codex
 ```
 
 This writes a managed provider block to `~/.codex/config.toml`:
 
 ```toml
+model = "openai/gpt-5-codex"
 model_provider = "cc-router"
 
 [model_providers.cc-router]
@@ -371,6 +374,16 @@ base_url = "http://localhost:3456/v1"
 wire_api = "responses"
 env_key = "CC_ROUTER_TOKEN"
 ```
+
+Configure router-side model defaults and aliases:
+
+```bash
+cc-router configure models \
+  --claude-model claude-sonnet-4-6 \
+  --openai-model gpt-5-codex
+```
+
+This writes `modelRouting` to `~/.cc-router/config.json`. It sets the Claude default, the OpenAI default, and practical aliases so `claude/sonnet`, `sonnet`, `openai/default`, and `openai/codex` resolve to the models you selected. Restart the router after changing these values.
 
 Then run Codex with the proxy secret in `CC_ROUTER_TOKEN` when your router is password-protected:
 
@@ -385,6 +398,14 @@ Model prefixes:
 | `openai/*` | OpenAI ChatGPT/Codex subscription route |
 | `claude/*` | Claude subscription route |
 | `anthropic/*` | Claude subscription route |
+
+Examples after the configuration above:
+
+| Public model | Routed upstream model |
+|--------------|----------------------|
+| `openai/codex` | `gpt-5-codex` |
+| `openai/default` | `gpt-5-codex` |
+| `claude/sonnet` | `claude-sonnet-4-6` |
 
 Claude Code can also send a `/v1/messages` request with an `openai/*` model. CC-Router translates that Anthropic Messages request into an OpenAI Responses request and converts JSON or basic text SSE responses back into Anthropic-shaped message responses.
 

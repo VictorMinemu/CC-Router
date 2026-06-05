@@ -9,6 +9,7 @@ import { forwardOpenAICodexResponse } from "../providers/openai/codex-transport.
 import type { AnthropicMessagesRequest } from "../protocol/anthropic-types.js";
 import type { OpenAIResponseCompleted } from "../protocol/openai-responses-types.js";
 import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -22,6 +23,7 @@ export interface MessagesCrossProviderRouteOptions {
   getOpenAIAccount: () => OpenAISubscriptionAccount | null;
   prepareOpenAIAccount?: (account: OpenAISubscriptionAccount) => Promise<boolean>;
   forwardOpenAI?: ForwardOpenAI;
+  modelRouting?: ModelRoutingConfig;
 }
 
 function isAnthropicMessagesRequest(value: unknown): value is AnthropicMessagesRequest {
@@ -121,7 +123,7 @@ export function mountMessagesCrossProviderRoute(
         return;
       }
 
-      const route = selectRoute(req.body.model);
+      const route = selectRoute(req.body.model, opts.modelRouting);
       if (route.provider !== "openai_subscription") {
         next();
         return;
@@ -151,7 +153,7 @@ export function mountMessagesCrossProviderRoute(
         return;
       }
 
-      const body = anthropicToOpenAIResponses(req.body);
+      const body = anthropicToOpenAIResponses(req.body, opts.modelRouting);
       const upstream = await forwardOpenAI({
         account,
         body,

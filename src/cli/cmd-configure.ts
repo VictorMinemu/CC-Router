@@ -4,14 +4,61 @@ import { writeClaudeSettings, removeClaudeSettings, readClaudeProxySettings } fr
 import { writeCodexRouterConfig } from "../utils/codex-config.js";
 import { readConfig, writeConfig, generateProxySecret } from "../config/manager.js";
 import { PROXY_PORT, CLAUDE_SETTINGS_PATH } from "../config/paths.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
+
+export interface ConfigureModelsOptions {
+  claudeModel?: string;
+  openAIModel?: string;
+}
+
+function cleanModel(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function buildModelRoutingUpdate(
+  existing: ModelRoutingConfig | undefined,
+  opts: ConfigureModelsOptions,
+): ModelRoutingConfig {
+  const next: ModelRoutingConfig = {
+    ...existing,
+    anthropicAliases: { ...(existing?.anthropicAliases ?? {}) },
+    openAIAliases: { ...(existing?.openAIAliases ?? {}) },
+  };
+
+  const claudeModel = cleanModel(opts.claudeModel);
+  if (claudeModel) {
+    next.anthropicDefaultModel = claudeModel;
+    next.anthropicAliases = {
+      ...next.anthropicAliases,
+      "claude/sonnet": claudeModel,
+      sonnet: claudeModel,
+    };
+  }
+
+  const openAIModel = cleanModel(opts.openAIModel)?.replace(/^openai\//, "");
+  if (openAIModel) {
+    next.openAIDefaultModel = openAIModel;
+    next.openAIAliases = {
+      ...next.openAIAliases,
+      default: openAIModel,
+      codex: openAIModel,
+    };
+  }
+
+  return next;
+}
 
 export function registerConfigure(program: Command): void {
   program
     .command("configure")
     .description("Configure Claude Code or Codex to point to the proxy")
-    .argument("[target]", "Optional target to configure: codex")
+    .argument("[target]", "Optional target to configure: codex, models")
     .option("--remove", "Remove cc-router settings from ~/.claude/settings.json")
     .option("--port <port>", "Proxy port to configure", String(PROXY_PORT))
+    .option("--model <model>", "Default model for the configured target")
+    .option("--claude-model <model>", "Default Claude/Anthropic model for router aliases")
+    .option("--openai-model <model>", "Default OpenAI/Codex model for router aliases")
     .option("--show", "Show current Claude Code proxy settings")
     .option("--generate-password", "Generate a new proxy secret and sync Claude Code settings")
     .option("--set-password <secret>", "Set a specific proxy secret and sync Claude Code settings")
@@ -21,6 +68,9 @@ export function registerConfigure(program: Command): void {
     .action((target: string | undefined, opts: {
       remove?: boolean;
       port: string;
+      model?: string;
+      claudeModel?: string;
+      openaiModel?: string;
       show?: boolean;
       generatePassword?: boolean;
       setPassword?: string;
@@ -33,12 +83,32 @@ export function registerConfigure(program: Command): void {
         const result = writeCodexRouterConfig({
           baseUrl: `http://localhost:${port}/v1`,
           tokenEnvKey: "CC_ROUTER_TOKEN",
+          defaultModel: opts.model,
         });
         console.log(chalk.green(`✓ Updated ${result.path}`));
         console.log(chalk.gray("  CODEX provider configured:"));
+        if (opts.model) console.log(chalk.gray(`    model          = ${opts.model}`));
         console.log(chalk.gray("    model_provider = cc-router"));
         console.log(chalk.gray(`    base_url       = http://localhost:${port}/v1`));
         console.log(chalk.gray("    env_key        = CC_ROUTER_TOKEN"));
+        return;
+      }
+
+      if (target === "models") {
+        if (!opts.claudeModel && !opts.openaiModel) {
+          console.error(chalk.red("Provide at least one model: --claude-model or --openai-model"));
+          process.exit(1);
+        }
+        const cfg = readConfig();
+        const modelRouting = buildModelRoutingUpdate(cfg.modelRouting, {
+          claudeModel: opts.claudeModel,
+          openAIModel: opts.openaiModel,
+        });
+        writeConfig({ ...cfg, modelRouting });
+        console.log(chalk.green("✓ Updated model routing defaults."));
+        if (opts.claudeModel) console.log(chalk.gray(`  Claude default: ${opts.claudeModel}`));
+        if (opts.openaiModel) console.log(chalk.gray(`  OpenAI default: ${opts.openaiModel.replace(/^openai\//, "")}`));
+        console.log(chalk.gray("  Restart cc-router for the change to affect running traffic."));
         return;
       }
 
