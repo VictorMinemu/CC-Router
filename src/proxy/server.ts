@@ -22,6 +22,7 @@ import { prepareOpenAIAccountForRequest, startOpenAIRefreshLoop } from "../provi
 import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
 import { mountResponsesRoutes } from "./responses-server.js";
 import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
+import { mountModelsRoute } from "./models-server.js";
 import chalk from "chalk";
 
 // Augment Request to carry the selected account and pending log entry
@@ -418,6 +419,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   app.use("/cc-router/accounts", accountsRouter);
+
+  mountModelsRoute(app, {
+    getAnthropicAccounts: () => pool.getAll(),
+    getOpenAIAccounts: () => openAIAccounts,
+    prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
+    modelRouting,
+  });
 
   mountResponsesRoutes(app, {
     getOpenAIAccount: pickOpenAIAccount,

@@ -385,6 +385,14 @@ cc-router configure models \
 
 This writes `modelRouting` to `~/.cc-router/config.json`. It sets the Claude default, the OpenAI default, and practical aliases so `claude/sonnet`, `sonnet`, `openai/default`, and `openai/codex` resolve to the models you selected. Restart the router after changing these values.
 
+Model discovery is dynamic. `GET /v1/models` returns an OpenAI-compatible model list by querying the configured Anthropic and OpenAI subscription APIs live:
+
+```bash
+curl http://localhost:3456/v1/models
+```
+
+Results are provider-prefixed, for example `anthropic/claude-sonnet-4-6` and `openai/gpt-5-codex`. Configured aliases such as `openai/codex` are added when their upstream model is available. If one provider is temporarily unavailable, CC-Router still returns the models discovered from the other providers.
+
 Then run Codex with the proxy secret in `CC_ROUTER_TOKEN` when your router is password-protected:
 
 ```bash
