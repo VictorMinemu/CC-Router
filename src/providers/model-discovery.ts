@@ -2,7 +2,7 @@ import type { OpenAISubscriptionAccount } from "./openai/token-refresher.js";
 import type { Account } from "../proxy/types.js";
 
 export const ANTHROPIC_MODELS_ENDPOINT = "https://api.anthropic.com/v1/models";
-export const OPENAI_CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
+export const OPENAI_CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0";
 export const MODEL_DISCOVERY_TIMEOUT_MS = 3_000;
 
 export type FetchLike = typeof fetch;

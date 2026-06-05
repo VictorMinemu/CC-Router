@@ -18,13 +18,35 @@ describe("mountModelsRoute", () => {
 
     const body = await getJson(app, "/v1/models");
 
-    expect(body).toEqual({
+    expect(body).toMatchObject({
       object: "list",
       data: [
         { id: "anthropic/claude-sonnet-4-6", object: "model", owned_by: "anthropic_subscription" },
         { id: "openai/gpt-5-codex", object: "model", owned_by: "openai_subscription" },
       ],
     });
+  });
+
+  it("also exposes Codex CLI compatible model entries", async () => {
+    const app = express();
+
+    mountModelsRoute(app, {
+      getAnthropicAccounts: () => [],
+      getOpenAIAccounts: () => [makeOpenAIAccount()],
+      fetchOpenAIModels: async () => ["gpt-5.4-mini"],
+    });
+
+    const body = await getJson(app, "/v1/models");
+
+    expect(body.models).toEqual([
+      expect.objectContaining({
+        slug: "openai/gpt-5.4-mini",
+        display_name: "openai/gpt-5.4-mini",
+        supported_reasoning_levels: expect.any(Array),
+        input_modalities: ["text"],
+        supported_in_api: true,
+      }),
+    ]);
   });
 
   it("adds configured aliases and deduplicates repeated provider models", async () => {

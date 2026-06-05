@@ -98,7 +98,7 @@ describe("fetchOpenAICodexModels", () => {
     const models = await fetchOpenAICodexModels(makeOpenAIAccount(), fetchMock);
 
     expect(models).toEqual(["gpt-5-codex"]);
-    expect(fetchMock).toHaveBeenCalledWith("https://chatgpt.com/backend-api/codex/models", {
+    expect(fetchMock).toHaveBeenCalledWith("https://chatgpt.com/backend-api/codex/models?client_version=1.0.0", {
       method: "GET",
       headers: expect.objectContaining({
         authorization: "Bearer openai-access",

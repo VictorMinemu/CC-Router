@@ -34,10 +34,19 @@ function isAnthropicMessagesRequest(value: unknown): value is AnthropicMessagesR
   );
 }
 
-async function sendOpenAIAsAnthropic(upstream: globalThis.Response, res: Response): Promise<void> {
+async function sendOpenAIAsAnthropic(
+  upstream: globalThis.Response,
+  res: Response,
+  requestedStream: boolean,
+): Promise<void> {
   const contentType = upstream.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream")) {
-    await sendOpenAIStreamAsAnthropic(upstream, res);
+    if (requestedStream) {
+      await sendOpenAIStreamAsAnthropic(upstream, res);
+      return;
+    }
+
+    res.status(upstream.status).json(await collectOpenAIStreamAsAnthropicMessage(upstream));
     return;
   }
 
@@ -50,6 +59,75 @@ async function sendOpenAIAsAnthropic(upstream: globalThis.Response, res: Respons
 
   const json = await upstream.json() as OpenAIResponseCompleted;
   res.status(upstream.status).json(openAIResponseToAnthropicMessage(json));
+}
+
+async function collectOpenAIStreamAsAnthropicMessage(upstream: globalThis.Response): Promise<ReturnType<typeof openAIResponseToAnthropicMessage>> {
+  const reader = upstream.body?.getReader();
+  if (!reader) {
+    return openAIResponseToAnthropicMessage({ id: "", model: "", output: [], usage: {} });
+  }
+
+  const decoder = new TextDecoder();
+  let remainder = "";
+  let id = "";
+  let model = "";
+  let text = "";
+  let usage: OpenAIResponseCompleted["usage"] = {};
+
+  const applyEvent = (event: unknown) => {
+    if (typeof event !== "object" || event === null) return;
+    const openAIEvent = event as {
+      type?: string;
+      delta?: string;
+      response?: {
+        id?: string;
+        model?: string;
+        usage?: OpenAIResponseCompleted["usage"];
+      };
+    };
+
+    if (openAIEvent.type === "response.created") {
+      id = openAIEvent.response?.id ?? id;
+      model = openAIEvent.response?.model ?? model;
+      return;
+    }
+
+    if (openAIEvent.type === "response.output_text.delta") {
+      text += openAIEvent.delta ?? "";
+      return;
+    }
+
+    if (openAIEvent.type === "response.completed") {
+      id = openAIEvent.response?.id ?? id;
+      model = openAIEvent.response?.model ?? model;
+      usage = openAIEvent.response?.usage ?? usage;
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    const parsed = parseSseLines(remainder + decoder.decode(value, { stream: true }));
+    remainder = parsed.remainder;
+    parsed.events.forEach(applyEvent);
+  }
+
+  const tail = decoder.decode();
+  if (tail || remainder) {
+    parseSseLines(remainder + tail + "\n").events.forEach(applyEvent);
+  }
+
+  return openAIResponseToAnthropicMessage({
+    id,
+    model,
+    output: text ? [{
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text }],
+    }] : [],
+    usage,
+  });
 }
 
 async function sendOpenAIStreamAsAnthropic(upstream: globalThis.Response, res: Response): Promise<void> {
@@ -159,7 +237,7 @@ export function mountMessagesCrossProviderRoute(
         body,
         stream: body.stream === true,
       });
-      await sendOpenAIAsAnthropic(upstream, res);
+      await sendOpenAIAsAnthropic(upstream, res, req.body.stream === true);
     },
   );
 }

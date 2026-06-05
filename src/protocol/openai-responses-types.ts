@@ -49,6 +49,7 @@ export interface OpenAIResponsesRequest {
   tools?: OpenAITool[];
   max_output_tokens?: number;
   stream?: boolean;
+  store?: boolean;
 }
 
 export interface OpenAIResponseOutputMessage {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import { createServer } from "http";
-import { forwardOpenAICodexResponse } from "../providers/openai/codex-transport.js";
+import { forwardOpenAICodexResponse, toCodexBackendRequest } from "../providers/openai/codex-transport.js";
 import { mountResponsesRoutes } from "../proxy/responses-server.js";
 import type { OpenAIResponsesRequest } from "../protocol/openai-responses-types.js";
 
@@ -9,12 +9,10 @@ describe("forwardOpenAICodexResponse", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("forwards Responses requests to the ChatGPT Codex backend with account bearer token", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{\"id\":\"resp_1\"}", {
       status: 200,
-      headers: new Headers({ "content-type": "application/json" }),
-      text: async () => "{\"id\":\"resp_1\"}",
-    } as Response);
+      headers: { "content-type": "application/json" },
+    }));
 
     const upstream = await forwardOpenAICodexResponse({
       account: {
@@ -41,6 +39,43 @@ describe("forwardOpenAICodexResponse", () => {
         }),
       }),
     );
+  });
+
+  it("marks ChatGPT Codex streaming responses as text/event-stream when upstream omits content-type", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("event: response.completed\ndata: {}\n\n", {
+      status: 200,
+    }));
+
+    const upstream = await forwardOpenAICodexResponse({
+      account: {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      },
+      body: { model: "gpt-5.5", input: [] },
+      stream: false,
+    });
+
+    expect(upstream.headers.get("content-type")).toBe("text/event-stream");
+  });
+});
+
+describe("toCodexBackendRequest", () => {
+  it("adds ChatGPT Codex backend required fields and strips unsupported output caps", () => {
+    expect(toCodexBackendRequest({
+      model: "gpt-5.4-mini",
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      max_output_tokens: 32,
+    })).toEqual({
+      model: "gpt-5.4-mini",
+      instructions: "You are a concise coding assistant.",
+      input: [{ role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      store: false,
+      stream: true,
+    });
   });
 });
 

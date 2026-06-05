@@ -62,7 +62,7 @@ async function _doRefresh(account: Account): Promise<boolean> {
       logRefresh(account.id, false);
       console.error(`  Status: ${res.status} — ${body}`);
       account.consecutiveErrors++;
-      if (account.consecutiveErrors >= 3) account.healthy = false;
+      account.healthy = false;
       return false;
     }
 
@@ -87,7 +87,7 @@ async function _doRefresh(account: Account): Promise<boolean> {
     logRefresh(account.id, false);
     console.error(`  Error:`, err);
     account.consecutiveErrors++;
-    if (account.consecutiveErrors >= 3) account.healthy = false;
+    account.healthy = false;
     return false;
   }
 }

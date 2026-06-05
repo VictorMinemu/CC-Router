@@ -767,6 +767,18 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     if (needsRefresh(account)) {
       const ok = await refreshAccountToken(account);
       if (ok) saveAccounts(pool.getAll());
+      if (!ok) {
+        stats.totalErrors++;
+        logError(account.id, 401, "Token refresh failed");
+        res.status(401).json({
+          type: "error",
+          error: {
+            type: "authentication_error",
+            message: "Anthropic subscription token refresh failed",
+          },
+        });
+        return;
+      }
     }
 
     req._ccAccount = account;
@@ -851,7 +863,11 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       writePid(process.pid);
     }
 
-    logStartup(port, host, mode, target, accounts.length);
+    const totalAccountCount = accounts.length + openAIAccounts.length;
+    logStartup(port, host, mode, target, {
+      anthropic: accounts.length,
+      openai: openAIAccounts.length,
+    });
     if (autoUpdate) console.log(chalk.gray("  Auto-update: enabled (patch/minor)"));
 
     // Anonymous telemetry — fire-and-forget, never blocks proxy startup.
@@ -863,10 +879,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         void trackEvent("app_started", { first_run: true });
       }
       void trackEvent("proxy_started", {
-        account_count: accounts.length,
+        account_count: totalAccountCount,
         mode,
       });
-      startHeartbeat(accounts.length);
+      startHeartbeat(totalAccountCount);
     } catch {
       // never let telemetry break the proxy
     }
