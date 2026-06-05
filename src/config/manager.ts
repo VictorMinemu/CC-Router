@@ -66,6 +66,16 @@ export function upsertAccountRecord(record: AccountRecord): void {
   writeAccountsAtomicToPath(ACCOUNTS_PATH, next);
 }
 
+export function removeAccountRecordById(id: string): AccountRecord | null {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const removed = existing.find(a => a.id === id) ?? null;
+  if (!removed) return null;
+
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, existing.filter(a => a.id !== id));
+  return removed;
+}
+
 /** Deserialize flat AccountRecord[] from the default path into runtime Account[] */
 export function loadAccounts(): Account[] {
   return deserialize(readAccountsRaw() as AccountRecord[]);

@@ -23,6 +23,7 @@ import {
   writeAccountsAtomic,
   writeAnthropicAccountsPreservingOtherProviders,
   upsertAccountRecord,
+  removeAccountRecordById,
   saveOpenAIAccounts,
   loadAccounts,
   loadOpenAIAccounts,
@@ -177,6 +178,58 @@ describe("upsertAccountRecord", () => {
     expect(parsed).toHaveLength(2);
     expect(parsed[0].id).toBe("max-account-1");
     expect(parsed[1].accessToken).toBe("openai-access-updated");
+  });
+});
+
+describe("removeAccountRecordById", () => {
+  it("removes an OpenAI subscription record while preserving Anthropic accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid"],
+        enabled: true,
+      },
+    ]);
+
+    const removed = removeAccountRecordById("openai-primary");
+
+    expect(removed?.provider).toBe("openai_subscription");
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toEqual([sampleRecord]);
+  });
+
+  it("removes an Anthropic account while preserving OpenAI subscription records", () => {
+    const openAIRecord = {
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access",
+      refreshToken: "openai-refresh",
+      expiresAt: 1999999999000,
+      scopes: ["openid"],
+      enabled: true,
+    };
+    writeAccountsAtomic([sampleRecord, openAIRecord]);
+
+    const removed = removeAccountRecordById("max-account-1");
+
+    expect(removed?.id).toBe("max-account-1");
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toEqual([openAIRecord]);
+  });
+
+  it("returns null and leaves the file unchanged when the account is not found", () => {
+    writeAccountsAtomic([sampleRecord]);
+    const before = fs.readFileSync(accountsPath(), "utf-8");
+
+    const removed = removeAccountRecordById("missing-account");
+
+    expect(removed).toBeNull();
+    expect(fs.readFileSync(accountsPath(), "utf-8")).toBe(before);
   });
 });
 

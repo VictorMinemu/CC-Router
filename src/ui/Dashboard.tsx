@@ -23,6 +23,7 @@ interface AccountRateLimitsView {
 
 interface AccountStat {
   id: string;
+  provider?: "anthropic_subscription" | "openai_subscription";
   healthy: boolean;
   busy: boolean;
   requestCount: number;
@@ -199,6 +200,7 @@ function LiveDashboard({
     ? Math.max(0, data.accounts.findIndex(a => a.id === selectedAccountId))
     : 0;
   const selectedAccount = data.accounts[selectedAccountIndex] ?? null;
+  const selectedAccountIsAnthropic = selectedAccount?.provider !== "openai_subscription";
 
   // Inline text input state (for w / s keys)
   const [editBuffer, setEditBuffer] = useState("");
@@ -233,6 +235,10 @@ function LiveDashboard({
   // ── Async helpers (fire-and-forget with error → banner) ──────────────────
   const doToggleEnabled = useCallback(async () => {
     if (!selectedAccount) return;
+    if (selectedAccount.provider === "openai_subscription") {
+      showBanner("OpenAI accounts are managed from the CLI", "yellow");
+      return;
+    }
     const newValue = !(selectedAccount.enabled !== false);
     try {
       await api.patch(selectedAccount.id, { enabled: newValue });
@@ -244,6 +250,10 @@ function LiveDashboard({
 
   const doSetLimit = useCallback(async (field: "sessionLimitPercent" | "weeklyLimitPercent", value: number) => {
     if (!selectedAccount) return;
+    if (selectedAccount.provider === "openai_subscription") {
+      showBanner("OpenAI accounts do not use Anthropic caps", "yellow");
+      return;
+    }
     try {
       await api.patch(selectedAccount.id, { [field]: value });
       const label = field === "sessionLimitPercent" ? "5h cap" : "7d cap";
@@ -255,6 +265,10 @@ function LiveDashboard({
 
   const doDelete = useCallback(async () => {
     if (!selectedAccount) return;
+    if (selectedAccount.provider === "openai_subscription") {
+      showBanner("Use cc-router accounts remove for OpenAI accounts", "yellow");
+      return;
+    }
     try {
       await api.remove(selectedAccount.id);
       showBanner(`Removed ${selectedAccount.id}`, "yellow");
@@ -346,9 +360,18 @@ function LiveDashboard({
 
       // Account actions (only when focus = accounts)
       if (input === "e") { void doToggleEnabled(); return; }
-      if (input === "w") { setMode("editWeekly"); setEditBuffer(""); return; }
-      if (input === "s") { setMode("editSession"); setEditBuffer(""); return; }
-      if (input === "d") { setMode("confirmDelete"); return; }
+      if (input === "w") {
+        if (!selectedAccountIsAnthropic) { showBanner("OpenAI accounts do not use Anthropic caps", "yellow"); return; }
+        setMode("editWeekly"); setEditBuffer(""); return;
+      }
+      if (input === "s") {
+        if (!selectedAccountIsAnthropic) { showBanner("OpenAI accounts do not use Anthropic caps", "yellow"); return; }
+        setMode("editSession"); setEditBuffer(""); return;
+      }
+      if (input === "d") {
+        if (!selectedAccountIsAnthropic) { showBanner("Use cc-router accounts remove for OpenAI accounts", "yellow"); return; }
+        setMode("confirmDelete"); return;
+      }
     }
 
     // n = add account — works regardless of focus.
@@ -508,7 +531,9 @@ function AccountRow({ account: a, selected }: { account: AccountStat; selected: 
     : a.expiresInMs < 30 * 60 * 1000 ? "yellow"
     : "white";
 
-  const planTag = rl.plan ? ` [${rl.plan}]` : "";
+  const providerTag = a.provider === "openai_subscription"
+    ? " [OpenAI]"
+    : rl.plan ? ` [${rl.plan}]` : "";
 
   // User-defined caps hint
   const s5 = a.sessionLimitPercent ?? 100;
@@ -528,8 +553,8 @@ function AccountRow({ account: a, selected }: { account: AccountStat; selected: 
         <Text color={dotColor}> {dot} </Text>
         <Text color={nameColor} dimColor={isDisabled}>{a.id.slice(0, 20).padEnd(20)}</Text>
         <Text color={statusColor}>{statusLabel}</Text>
-        {planTag && <Text color="magenta">{planTag.padEnd(10)}</Text>}
-        {!planTag && <Text>{"".padEnd(10)}</Text>}
+        {providerTag && <Text color={a.provider === "openai_subscription" ? "cyan" : "magenta"}>{providerTag.padEnd(10)}</Text>}
+        {!providerTag && <Text>{"".padEnd(10)}</Text>}
         <Text color="gray"> req </Text>
         <Text color="white">{String(a.requestCount).padStart(5)}</Text>
         <Text color="gray">  err </Text>

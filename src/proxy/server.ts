@@ -19,6 +19,7 @@ import { writePid, removePid } from "../daemon/pid.js";
 import type { Account, AccountRateLimits, AccountRecord } from "./types.js";
 import { createOpenAIAccountPicker } from "../providers/openai/account-pool.js";
 import { prepareOpenAIAccountForRequest, startOpenAIRefreshLoop } from "../providers/openai/token-refresher.js";
+import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
 import { mountResponsesRoutes } from "./responses-server.js";
 import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
 import chalk from "chalk";
@@ -37,6 +38,66 @@ export interface ServerOptions {
   /** Forward to LiteLLM. If not set, goes directly to Anthropic. */
   litellmUrl?: string;
   accountsPath?: string;
+}
+
+export interface HealthAccountView {
+  id: string;
+  provider: "anthropic_subscription" | "openai_subscription";
+  enabled: boolean;
+  healthy: boolean;
+  busy: boolean;
+  requestCount: number;
+  errorCount: number;
+  expiresInMs: number;
+  lastUsedMs: number;
+  lastRefreshMs: number;
+  rateLimits?: AccountRateLimits;
+  sessionLimitPercent?: number;
+  weeklyLimitPercent?: number;
+}
+
+export function createHealthAccountViews(
+  anthropicAccounts: Account[],
+  openAIAccounts: OpenAISubscriptionAccount[],
+): HealthAccountView[] {
+  return [
+    ...anthropicAccounts.map(publicAnthropicAccountView),
+    ...openAIAccounts.map(publicOpenAIAccountView),
+  ];
+}
+
+function publicAnthropicAccountView(a: Account): HealthAccountView {
+  return {
+    id: a.id,
+    provider: "anthropic_subscription",
+    enabled: a.enabled,
+    sessionLimitPercent: a.sessionLimitPercent,
+    weeklyLimitPercent: a.weeklyLimitPercent,
+    healthy: a.healthy,
+    busy: a.busy,
+    requestCount: a.requestCount,
+    errorCount: a.errorCount,
+    expiresInMs: a.tokens.expiresAt - Date.now(),
+    lastUsedMs: a.lastUsed,
+    lastRefreshMs: a.lastRefresh,
+    rateLimits: a.rateLimits,
+  };
+}
+
+function publicOpenAIAccountView(a: OpenAISubscriptionAccount): HealthAccountView {
+  const expiresInMs = a.expiresAt - Date.now();
+  return {
+    id: a.id,
+    provider: "openai_subscription",
+    enabled: a.enabled !== false,
+    healthy: a.enabled !== false && expiresInMs > 0,
+    busy: false,
+    requestCount: 0,
+    errorCount: 0,
+    expiresInMs,
+    lastUsedMs: 0,
+    lastRefreshMs: 0,
+  };
 }
 
 // Mutates entry and updates aggregate counters with token usage from Anthropic's
@@ -172,8 +233,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // Sweep expired cooldowns on each poll so the dashboard reflects recovery
     // even during idle periods when no /v1 request would trigger getNext().
     pool.sweepExpiredCooldowns();
+    const accountViews = createHealthAccountViews(pool.getAll(), openAIAccounts);
     res.json({
-      status: pool.getHealthy().length > 0 ? "ok" : "degraded",
+      status: accountViews.some(a => a.healthy) ? "ok" : "degraded",
       mode,
       target,
       uptime: stats.getUptimeSeconds(),
@@ -184,7 +246,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       totalCacheCreationTokens: stats.totalCacheCreationTokens,
       totalInputTokens: stats.totalInputTokens,
       totalOutputTokens: stats.totalOutputTokens,
-      accounts: pool.getStats(),
+      accounts: accountViews,
       recentLogs: stats.getRecentLogs(50),
     });
   });
@@ -197,23 +259,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   accountsRouter.use(express.json({ limit: "32kb" }));
 
   // Shape returned to clients — NEVER includes access/refresh tokens.
-  const publicAccountView = (a: Account) => ({
-    id: a.id,
-    enabled: a.enabled,
-    sessionLimitPercent: a.sessionLimitPercent,
-    weeklyLimitPercent: a.weeklyLimitPercent,
-    healthy: a.healthy,
-    busy: a.busy,
-    requestCount: a.requestCount,
-    errorCount: a.errorCount,
-    expiresInMs: a.tokens.expiresAt - Date.now(),
-    lastUsedMs: a.lastUsed,
-    lastRefreshMs: a.lastRefresh,
-    rateLimits: a.rateLimits,
-  });
-
   accountsRouter.get("/", (_req, res) => {
-    res.json({ accounts: pool.getAll().map(publicAccountView) });
+    res.json({ accounts: pool.getAll().map(publicAnthropicAccountView) });
   });
 
   /**
@@ -285,7 +332,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       res.status(500).json({ error: `Failed to persist accounts.json: ${result.message}` });
       return;
     }
-    res.json({ account: publicAccountView(updated) });
+    res.json({ account: publicAnthropicAccountView(updated) });
   });
 
   accountsRouter.post("/", (req, res) => {
@@ -333,7 +380,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       res.status(500).json({ error: `Failed to persist accounts.json: ${result.message}` });
       return;
     }
-    res.status(201).json({ account: publicAccountView(added) });
+    res.status(201).json({ account: publicAnthropicAccountView(added) });
   });
 
   accountsRouter.delete("/:id", (req, res) => {

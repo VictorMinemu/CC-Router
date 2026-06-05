@@ -291,7 +291,7 @@ cc-router accounts list      List configured accounts (live stats if proxy is ru
 cc-router accounts add       Add an account interactively
 cc-router accounts login-openai  Sign in to OpenAI subscription auth with device code
 cc-router accounts add-openai  Add an OpenAI subscription account manually (experimental)
-cc-router accounts remove <id>  Remove an account
+cc-router accounts remove <id>  Remove a Claude or OpenAI account
 
 cc-router configure          (Re)write ~/.claude/settings.json
 cc-router configure codex    (Re)write ~/.codex/config.toml for Codex CLI

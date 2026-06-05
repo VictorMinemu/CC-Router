@@ -1,11 +1,13 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { loadAccounts, loadOpenAIAccounts, accountsFileExists, writeAccountsAtomic, serialize, upsertAccountRecord } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, accountsFileExists, upsertAccountRecord, removeAccountRecordById } from "../config/manager.js";
 import { saveAccounts } from "../proxy/token-refresher.js";
 import { formatExpiry, redactToken } from "../utils/token-extractor.js";
 import { PROXY_PORT } from "../config/paths.js";
 import { createOpenAIAccountRecord } from "../providers/openai/account-record.js";
 import { loginOpenAIWithDeviceCode } from "../providers/openai/device-oauth.js";
+import type { Account } from "../proxy/types.js";
+import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
 
 export function registerAccounts(program: Command): void {
   const accounts = program
@@ -34,7 +36,7 @@ export function registerAccounts(program: Command): void {
       }
 
       if (opts.json) {
-        console.log(JSON.stringify(liveStats ?? stored, null, 2));
+        console.log(JSON.stringify(liveStats ?? buildStoredAccountsJson(stored, openAIStored), null, 2));
         return;
       }
 
@@ -43,6 +45,9 @@ export function registerAccounts(program: Command): void {
       if (liveStats) {
         console.log(chalk.green("  ● Proxy is running — showing live stats\n"));
         for (const s of liveStats) {
+          const provider = s.provider === "openai_subscription"
+            ? chalk.cyan("openai".padEnd(9))
+            : chalk.gray("claude".padEnd(9));
           const status = s.healthy
             ? chalk.green("✓ healthy")
             : chalk.red("✗ unhealthy");
@@ -52,6 +57,7 @@ export function registerAccounts(program: Command): void {
             : chalk.red("EXPIRED");
           console.log(
             `  ${chalk.bold(s.id.padEnd(24))}` +
+            `  ${provider}` +
             `  ${status}${busy}` +
             `  requests: ${chalk.cyan(String(s.requestCount).padStart(5))}` +
             `  errors: ${chalk.red(String(s.errorCount).padStart(3))}` +
@@ -202,12 +208,16 @@ export function registerAccounts(program: Command): void {
         return;
       }
 
-      const existing = loadAccounts();
-      const filtered = existing.filter(a => a.id !== id);
+      const anthropicAccounts = loadAccounts();
+      const openAIAccounts = loadOpenAIAccounts();
+      const existingIds = [
+        ...anthropicAccounts.map(a => a.id),
+        ...openAIAccounts.map(a => a.id),
+      ];
 
-      if (filtered.length === existing.length) {
+      if (!existingIds.includes(id)) {
         console.log(chalk.red(`✗ Account "${id}" not found.`));
-        console.log(chalk.gray(`  Available: ${existing.map(a => a.id).join(", ")}`));
+        console.log(chalk.gray(`  Available: ${existingIds.join(", ")}`));
         process.exit(1);
       }
 
@@ -218,10 +228,17 @@ export function registerAccounts(program: Command): void {
       });
       if (!sure) { console.log(chalk.gray("Cancelled.")); return; }
 
-      writeAccountsAtomic(serialize(filtered));
+      const removed = removeAccountRecordById(id);
+      if (!removed) {
+        console.log(chalk.red(`✗ Account "${id}" disappeared before it could be removed.`));
+        process.exit(1);
+      }
 
-      console.log(chalk.green(`✓ Removed "${id}". ${filtered.length} account(s) remaining.`));
-      if (filtered.length === 0) {
+      const remaining = loadAccounts().length + loadOpenAIAccounts().length;
+      const providerLabel = removed.provider === "openai_subscription" ? "OpenAI account" : "Account";
+
+      console.log(chalk.green(`✓ Removed ${providerLabel} "${id}". ${remaining} account(s) remaining.`));
+      if (remaining === 0) {
         console.log(chalk.yellow("  No accounts left. Run: cc-router setup"));
       }
     });
@@ -229,8 +246,35 @@ export function registerAccounts(program: Command): void {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+export function buildStoredAccountsJson(
+  anthropicAccounts: Account[],
+  openAIAccounts: OpenAISubscriptionAccount[],
+): Array<{
+  id: string;
+  provider: "anthropic_subscription" | "openai_subscription";
+  enabled: boolean;
+  expiresAt: number;
+  scopes?: string[];
+}> {
+  return [
+    ...anthropicAccounts.map(a => ({
+      id: a.id,
+      provider: "anthropic_subscription" as const,
+      enabled: a.enabled,
+      expiresAt: a.tokens.expiresAt,
+      scopes: a.tokens.scopes,
+    })),
+    ...openAIAccounts.map(a => ({
+      id: a.id,
+      provider: "openai_subscription" as const,
+      enabled: a.enabled !== false,
+      expiresAt: a.expiresAt,
+    })),
+  ];
+}
+
 async function fetchLiveStats(): Promise<null | Array<{
-  id: string; healthy: boolean; busy: boolean;
+  id: string; provider?: string; healthy: boolean; busy: boolean;
   requestCount: number; errorCount: number; expiresInMs: number;
 }>> {
   try {
