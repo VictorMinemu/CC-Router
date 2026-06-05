@@ -289,6 +289,7 @@ cc-router logs --lines 100   Show last 100 lines
 
 cc-router accounts list      List configured accounts (live stats if proxy is running)
 cc-router accounts add       Add an account interactively
+cc-router accounts add-openai  Add an OpenAI subscription account manually (experimental)
 cc-router accounts remove <id>  Remove an account
 
 cc-router configure          (Re)write ~/.claude/settings.json
@@ -398,6 +399,14 @@ OpenAI subscription account records are separated from Claude accounts with `pro
 ```
 
 The OAuth login wizard for adding these records is still being built. Until then, treat this as an experimental developer path, not a stable end-user setup.
+
+Manual account entry is available:
+
+```bash
+cc-router accounts add-openai
+```
+
+This prompts for the OpenAI access token, refresh token, expiry timestamp, and scopes, validates the record shape, and saves it without overwriting Claude accounts.
 
 ---
 

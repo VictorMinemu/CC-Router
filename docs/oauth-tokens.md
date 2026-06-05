@@ -117,6 +117,14 @@ Codex subscription auth is a separate provider path from Claude auth. OpenAI sub
 
 These records are not loaded into the Anthropic token pool. They are used only by the OpenAI Responses-compatible `/v1/responses` route.
 
+To add one manually:
+
+```bash
+cc-router accounts add-openai
+```
+
+The command validates the record shape and appends or replaces only the matching OpenAI account. Anthropic token refreshes preserve OpenAI records in `accounts.json`.
+
 OpenAI subscription refreshes use:
 
 ```http
