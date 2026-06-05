@@ -166,6 +166,8 @@ server {
 }
 ```
 
+For longer requests, set `proxyRequestTimeoutMs` in `~/.cc-router/config.json` (milliseconds) and keep `proxy_read_timeout` at least as high.
+
 Each developer then points to:
 ```json
 {
