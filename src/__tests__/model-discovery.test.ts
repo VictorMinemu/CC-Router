@@ -69,7 +69,7 @@ describe("normalizeModelIds", () => {
 });
 
 describe("fetchAnthropicModels", () => {
-  it("calls Anthropic /v1/models with OAuth headers and returns ids", async () => {
+  it("calls Anthropic /v1/models with OAuth x-api-key headers and returns ids", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: "claude-sonnet-4-6" }],
     }), { status: 200, headers: { "content-type": "application/json" } }));
@@ -80,7 +80,7 @@ describe("fetchAnthropicModels", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.anthropic.com/v1/models", {
       method: "GET",
       headers: expect.objectContaining({
-        authorization: "Bearer ant-access",
+        "x-api-key": "ant-access",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "oauth-2025-04-20",
       }),
