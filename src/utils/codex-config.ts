@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import os from "os";
+import type { ProxyConfig } from "../config/manager.js";
 
 const START = "# cc-router:start";
 const END = "# cc-router:end";
@@ -22,6 +23,15 @@ export interface WriteCodexRouterConfigOptions {
 
 export interface WriteCodexRouterConfigResult {
   path: string;
+}
+
+export interface WriteCodexRouterConfigFromClientResult extends WriteCodexRouterConfigResult {
+  hasSecret: boolean;
+}
+
+export function codexBaseUrlFromRouterUrl(remoteUrl: string): string {
+  const base = remoteUrl.trim().replace(/\/+$/, "");
+  return base.endsWith("/v1") ? base : `${base}/v1`;
 }
 
 function managedBlock(baseUrl: string, tokenEnvKey: string, defaultModel?: string): string {
@@ -67,4 +77,24 @@ export function writeCodexRouterConfig(opts: WriteCodexRouterConfigOptions): Wri
   fs.writeFileSync(configPath, next, "utf-8");
 
   return { path: configPath };
+}
+
+export function writeCodexRouterConfigFromClient(
+  cfg: Pick<ProxyConfig, "client">,
+  opts: Omit<WriteCodexRouterConfigOptions, "baseUrl" | "tokenEnvKey"> = {},
+): WriteCodexRouterConfigFromClientResult {
+  if (!cfg.client?.remoteUrl) {
+    throw new Error("Client mode is not configured. Run: cc-router client connect <url>");
+  }
+
+  const result = writeCodexRouterConfig({
+    ...opts,
+    baseUrl: codexBaseUrlFromRouterUrl(cfg.client.remoteUrl),
+    tokenEnvKey: "CC_ROUTER_TOKEN",
+  });
+
+  return {
+    ...result,
+    hasSecret: Boolean(cfg.client.remoteSecret),
+  };
 }

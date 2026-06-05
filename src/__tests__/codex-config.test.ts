@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { writeCodexRouterConfig } from "../utils/codex-config.js";
+import {
+  codexBaseUrlFromRouterUrl,
+  writeCodexRouterConfig,
+  writeCodexRouterConfigFromClient,
+} from "../utils/codex-config.js";
 
 describe("writeCodexRouterConfig", () => {
   it("writes a user-level Codex provider profile for CC-Router", () => {
@@ -80,5 +84,53 @@ describe("writeCodexRouterConfig", () => {
     });
 
     expect(writeFileSync.mock.calls[0][1]).toContain("model = \"openai/gpt-5-codex\"");
+  });
+});
+
+describe("codexBaseUrlFromRouterUrl", () => {
+  it("uses the remote router URL as an OpenAI-compatible /v1 base URL", () => {
+    expect(codexBaseUrlFromRouterUrl("https://router.example.com")).toBe("https://router.example.com/v1");
+    expect(codexBaseUrlFromRouterUrl("https://router.example.com/")).toBe("https://router.example.com/v1");
+    expect(codexBaseUrlFromRouterUrl("https://router.example.com/v1")).toBe("https://router.example.com/v1");
+  });
+});
+
+describe("writeCodexRouterConfigFromClient", () => {
+  it("configures Codex from stored client mode remote URL", () => {
+    const writeFileSync = vi.fn();
+
+    const result = writeCodexRouterConfigFromClient({
+      client: {
+        remoteUrl: "https://router.example.com",
+        remoteSecret: "secret",
+      },
+    }, {
+      homeDir: "/tmp/home",
+      defaultModel: "openai/default",
+      fs: {
+        existsSync: () => false,
+        readFileSync: () => "",
+        writeFileSync,
+        mkdirSync: vi.fn(),
+      },
+    });
+
+    const written = String(writeFileSync.mock.calls[0][1]);
+    expect(result.hasSecret).toBe(true);
+    expect(written).toContain("model = \"openai/default\"");
+    expect(written).toContain("base_url = \"https://router.example.com/v1\"");
+    expect(written).toContain("env_key = \"CC_ROUTER_TOKEN\"");
+    expect(written).not.toContain("secret");
+  });
+
+  it("fails clearly when client mode has not been configured", () => {
+    expect(() => writeCodexRouterConfigFromClient({}, {
+      fs: {
+        existsSync: () => false,
+        readFileSync: () => "",
+        writeFileSync: vi.fn(),
+        mkdirSync: vi.fn(),
+      },
+    })).toThrow("Client mode is not configured");
   });
 });

@@ -4,6 +4,7 @@ import { existsSync } from "fs";
 import { input, confirm } from "@inquirer/prompts";
 import { readConfig, writeConfig, type ClientConfig } from "../config/manager.js";
 import { writeClaudeSettings, removeClaudeSettings, readClaudeProxySettings } from "../utils/claude-config.js";
+import { codexBaseUrlFromRouterUrl, writeCodexRouterConfigFromClient } from "../utils/codex-config.js";
 import { isMacos, isWindows } from "../utils/platform.js";
 import {
   checkMitmproxyInstalled,
@@ -120,7 +121,9 @@ export function registerClient(program: Command): void {
     .description("Connect Claude Code to a CC-Router server")
     .option("-s, --secret <secret>", "Proxy authentication secret")
     .option("-d, --desktop", "Also configure Claude Desktop interception via mitmproxy")
-    .action(async (rawUrl?: string, opts?: { secret?: string; desktop?: boolean }) => {
+    .option("--codex", "Also configure Codex CLI to use this remote CC-Router")
+    .option("--codex-model <model>", "Default Codex model when using --codex", "openai/default")
+    .action(async (rawUrl?: string, opts?: { secret?: string; desktop?: boolean; codex?: boolean; codexModel?: string }) => {
       console.log(chalk.bold("\n🔗 CC-Router Client Setup\n"));
 
       // 1. Get remote URL
@@ -160,6 +163,15 @@ export function registerClient(program: Command): void {
       console.log(chalk.green("✓ Claude Code configured to route through CC-Router"));
       console.log(chalk.gray(`  ANTHROPIC_BASE_URL → ${url}`));
 
+      if (opts?.codex) {
+        const result = writeCodexRouterConfigFromClient(cfg, {
+          defaultModel: opts.codexModel,
+        });
+        console.log(chalk.green("✓ Codex CLI configured to route through CC-Router"));
+        console.log(chalk.gray(`  config → ${result.path}`));
+        printCodexTokenReminder(result.hasSecret);
+      }
+
       // 6. Optionally configure Claude Desktop (Cowork / Agent mode only)
       let wantsDesktop = opts?.desktop ?? false;
       if (!opts?.desktop && isClaudeDesktopInstalled()) {
@@ -179,10 +191,35 @@ export function registerClient(program: Command): void {
       console.log(chalk.bold.green("\n✓ Client mode active\n"));
       console.log("  Next steps:");
       console.log("  • Restart Claude Code for the new settings to take effect");
+      if (!opts?.codex) {
+        console.log("  • Run " + chalk.cyan("cc-router client configure-codex") + " to route Codex through this server");
+      }
       if (wantsDesktop) {
         console.log("  • Run " + chalk.cyan("cc-router client start-desktop") + " to begin intercepting Claude Desktop");
       }
       console.log("  • Run " + chalk.cyan("cc-router client status") + " to check connection\n");
+    });
+
+  // ── cc-router client configure-codex ───────────────────────────────────────
+  client
+    .command("configure-codex")
+    .description("Configure Codex CLI from the stored CC-Router client connection")
+    .option("--model <model>", "Default Codex model", "openai/default")
+    .action((opts: { model: string }) => {
+      const cfg = readConfig();
+      try {
+        const result = writeCodexRouterConfigFromClient(cfg, {
+          defaultModel: opts.model,
+        });
+        console.log(chalk.green("✓ Codex CLI configured to route through CC-Router"));
+        console.log(chalk.gray(`  config   → ${result.path}`));
+        console.log(chalk.gray(`  base_url → ${codexBaseUrlFromRouterUrl(cfg.client!.remoteUrl)}`));
+        console.log(chalk.gray(`  model    → ${opts.model}`));
+        printCodexTokenReminder(result.hasSecret);
+      } catch (err) {
+        console.error(chalk.red(`✗ ${(err as Error).message}`));
+        process.exit(1);
+      }
     });
 
   // ── cc-router client disconnect ─────────────────────────────────────────────
@@ -446,6 +483,15 @@ export function registerClient(program: Command): void {
 }
 
 // ─── Desktop setup flow ───────────────────────────────────────────────────────
+
+function printCodexTokenReminder(hasSecret: boolean): void {
+  if (hasSecret) {
+    console.log(chalk.yellow("  Codex auth: set CC_ROUTER_TOKEN to your client proxy secret before running codex."));
+    console.log(chalk.gray("  Example: export CC_ROUTER_TOKEN=\"<your-cc-router-secret>\""));
+    return;
+  }
+  console.log(chalk.gray("  Codex auth: no proxy secret configured on this client."));
+}
 
 /**
  * Printed before asking the user whether to enable Desktop interception.
