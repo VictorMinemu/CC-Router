@@ -7,7 +7,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool, EmptyPoolError } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
@@ -17,6 +17,8 @@ import type { LogEntry } from "./stats.js";
 import { PROXY_PORT, LITELLM_URL } from "../config/paths.js";
 import { writePid, removePid } from "../daemon/pid.js";
 import type { Account, AccountRateLimits, AccountRecord } from "./types.js";
+import { createOpenAIAccountPicker } from "../providers/openai/account-pool.js";
+import { mountResponsesRoutes } from "./responses-server.js";
 import chalk from "chalk";
 
 // Augment Request to carry the selected account and pending log entry
@@ -100,13 +102,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
 
   const accounts = accountsPath ? readAccountsFromPath(accountsPath) : loadAccounts();
-  if (accounts.length === 0) {
+  const openAIAccounts = loadOpenAIAccounts(accountsPath);
+  if (accounts.length === 0 && openAIAccounts.length === 0) {
     console.error(chalk.red("\n✗ No accounts found in accounts.json."));
     console.error(chalk.yellow("  Run: cc-router setup\n"));
     process.exit(1);
   }
 
   const pool = new TokenPool(accounts);
+  const pickOpenAIAccount = createOpenAIAccountPicker(openAIAccounts);
 
   // Log when the pool falls back to a capped account — makes the cap bypass
   // visible in the dashboard's "RECENT ACTIVITY" instead of being silent.
@@ -362,6 +366,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   app.use("/cc-router/accounts", accountsRouter);
+
+  mountResponsesRoutes(app, {
+    getOpenAIAccount: pickOpenAIAccount,
+  });
 
   // ─── Proxy middleware ──────────────────────────────────────────────────────
   // IMPORTANT: selfHandleResponse must be false (default) for SSE streaming to
