@@ -23,6 +23,7 @@ import type { OpenAISubscriptionAccount } from "../providers/openai/token-refres
 import { mountResponsesRoutes } from "./responses-server.js";
 import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
 import { mountModelsRoute } from "./models-server.js";
+import type { ModelRoutingConfig } from "../protocol/model-ref.js";
 import chalk from "chalk";
 
 // Augment Request to carry the selected account and pending log entry
@@ -55,6 +56,85 @@ export interface HealthAccountView {
   rateLimits?: AccountRateLimits;
   sessionLimitPercent?: number;
   weeklyLimitPercent?: number;
+}
+
+export interface OperationalStatus {
+  mode: string;
+  target: string;
+  auth: { required: boolean };
+  providers: {
+    anthropic: ProviderOperationalStatus;
+    openai: ProviderOperationalStatus;
+  };
+  endpoints: {
+    health: string;
+    accounts: string;
+    messages: string;
+    responses: string;
+    models: string;
+  };
+  routing: {
+    anthropicDefaultModel?: string;
+    openAIDefaultModel?: string;
+    anthropicAliases: string[];
+    openAIAliases: string[];
+  };
+  capabilities: {
+    anthropicMessages: boolean;
+    openAIResponses: boolean;
+    crossProviderMessages: boolean;
+    dynamicModels: boolean;
+    accountManagement: boolean;
+  };
+}
+
+export interface ProviderOperationalStatus {
+  configured: boolean;
+  accounts: number;
+  healthy: number;
+  enabled: number;
+}
+
+export function createOperationalStatus(opts: {
+  mode: string;
+  target: string;
+  authRequired: boolean;
+  accounts: HealthAccountView[];
+  modelRouting?: ModelRoutingConfig;
+}): OperationalStatus {
+  const anthropicAccounts = opts.accounts.filter(a => a.provider === "anthropic_subscription");
+  const openAIAccounts = opts.accounts.filter(a => a.provider === "openai_subscription");
+  const modelRouting = opts.modelRouting ?? {};
+
+  return {
+    mode: opts.mode,
+    target: opts.target,
+    auth: { required: opts.authRequired },
+    providers: {
+      anthropic: providerStatus(anthropicAccounts),
+      openai: providerStatus(openAIAccounts),
+    },
+    endpoints: {
+      health: "/cc-router/health",
+      accounts: "/cc-router/accounts",
+      messages: "/v1/messages",
+      responses: "/v1/responses",
+      models: "/v1/models",
+    },
+    routing: {
+      anthropicDefaultModel: modelRouting.anthropicDefaultModel,
+      openAIDefaultModel: modelRouting.openAIDefaultModel,
+      anthropicAliases: Object.keys(modelRouting.anthropicAliases ?? {}).sort(),
+      openAIAliases: Object.keys(modelRouting.openAIAliases ?? {}).sort(),
+    },
+    capabilities: {
+      anthropicMessages: anthropicAccounts.length > 0,
+      openAIResponses: openAIAccounts.length > 0,
+      crossProviderMessages: openAIAccounts.length > 0,
+      dynamicModels: true,
+      accountManagement: true,
+    },
+  };
 }
 
 export function createHealthAccountViews(
@@ -98,6 +178,15 @@ function publicOpenAIAccountView(a: OpenAISubscriptionAccount): HealthAccountVie
     expiresInMs,
     lastUsedMs: 0,
     lastRefreshMs: 0,
+  };
+}
+
+function providerStatus(accounts: HealthAccountView[]): ProviderOperationalStatus {
+  return {
+    configured: accounts.length > 0,
+    accounts: accounts.length,
+    healthy: accounts.filter(a => a.healthy).length,
+    enabled: accounts.filter(a => a.enabled !== false).length,
   };
 }
 
@@ -241,6 +330,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       status: accountViews.some(a => a.healthy) ? "ok" : "degraded",
       mode,
       target,
+      operational: createOperationalStatus({
+        mode,
+        target,
+        authRequired: Boolean(proxySecret),
+        accounts: accountViews,
+        modelRouting,
+      }),
       uptime: stats.getUptimeSeconds(),
       totalRequests: stats.totalRequests,
       totalErrors: stats.totalErrors,

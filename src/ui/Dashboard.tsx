@@ -47,6 +47,7 @@ interface HealthData {
   status: "ok" | "degraded";
   mode: string;
   target: string;
+  operational?: OperationalStatus;
   uptime: number;
   totalRequests: number;
   totalErrors: number;
@@ -57,6 +58,41 @@ interface HealthData {
   totalOutputTokens?: number;
   accounts: AccountStat[];
   recentLogs: LogEntry[];
+}
+
+interface OperationalStatus {
+  auth: { required: boolean };
+  providers: {
+    anthropic: ProviderOperationalStatus;
+    openai: ProviderOperationalStatus;
+  };
+  endpoints: {
+    health: string;
+    accounts: string;
+    messages: string;
+    responses: string;
+    models: string;
+  };
+  routing: {
+    anthropicDefaultModel?: string;
+    openAIDefaultModel?: string;
+    anthropicAliases: string[];
+    openAIAliases: string[];
+  };
+  capabilities: {
+    anthropicMessages: boolean;
+    openAIResponses: boolean;
+    crossProviderMessages: boolean;
+    dynamicModels: boolean;
+    accountManagement: boolean;
+  };
+}
+
+interface ProviderOperationalStatus {
+  configured: boolean;
+  accounts: number;
+  healthy: number;
+  enabled: number;
 }
 
 type Focus = "logs" | "accounts";
@@ -145,6 +181,7 @@ export function Dashboard({ port, baseUrl, authToken, onIntent }: DashboardProps
     <LiveDashboard
       data={data}
       port={port}
+      baseUrl={resolvedBase}
       lastUpdate={lastUpdate}
       api={api}
       onIntent={onIntent}
@@ -174,9 +211,9 @@ function ErrorScreen({ error, port, retries }: { error: string; port: number; re
 // ─── Live dashboard ───────────────────────────────────────────────────────────
 
 function LiveDashboard({
-  data, port, lastUpdate, api, onIntent,
+  data, port, baseUrl, lastUpdate, api, onIntent,
 }: {
-  data: HealthData; port: number; lastUpdate: number;
+  data: HealthData; port: number; baseUrl: string; lastUpdate: number;
   api: AccountsApi; onIntent?: (intent: "quit" | "addAccount") => void;
 }) {
   const { exit } = useApp();
@@ -401,6 +438,13 @@ function LiveDashboard({
 
       <Box marginTop={1} />
 
+      {data.operational && (
+        <>
+          <OperationsPanel operational={data.operational} baseUrl={baseUrl} />
+          <Box marginTop={1} />
+        </>
+      )}
+
       {/* ── Accounts table ── */}
       <Box flexDirection="column">
         <Box>
@@ -512,6 +556,71 @@ function LiveDashboard({
 
     </Box>
   );
+}
+
+function OperationsPanel({ operational, baseUrl }: { operational: OperationalStatus; baseUrl: string }) {
+  const authLabel = operational.auth.required ? "protected" : "open";
+  const authColor = operational.auth.required ? "green" : "yellow";
+  const claudeReady = operational.capabilities.anthropicMessages;
+  const openAIReady = operational.capabilities.openAIResponses;
+  const crossReady = operational.capabilities.crossProviderMessages;
+  const modelsReady = operational.capabilities.dynamicModels;
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text bold> OPERATIONS  </Text>
+        <Text color="gray">base </Text>
+        <Text color="cyan">{baseUrl}</Text>
+        <Text color="gray">  ·  auth </Text>
+        <Text color={authColor}>{authLabel}</Text>
+        <Text color="gray">  ·  models </Text>
+        <Text color={modelsReady ? "green" : "red"}>{modelsReady ? "dynamic" : "off"}</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <ProviderBadge label="Claude" status={operational.providers.anthropic} ready={claudeReady} />
+        <Text color="gray">  </Text>
+        <ProviderBadge label="OpenAI" status={operational.providers.openai} ready={openAIReady} />
+        <Text color="gray">  ·  cross-route </Text>
+        <Text color={crossReady ? "green" : "gray"}>{crossReady ? "ready" : "needs OpenAI"}</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <Text color="gray">endpoints </Text>
+        <Text color="white">{operational.endpoints.messages}</Text>
+        <Text color="gray"> </Text>
+        <Text color="white">{operational.endpoints.responses}</Text>
+        <Text color="gray"> </Text>
+        <Text color="white">{operational.endpoints.models}</Text>
+        <Text color="gray"> </Text>
+        <Text color="white">{operational.endpoints.accounts}</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <Text color="gray">routing </Text>
+        <Text color="white">claude={operational.routing.anthropicDefaultModel ?? "default"}</Text>
+        <Text color="gray"> aliases[{operational.routing.anthropicAliases.join(",") || "-"}]</Text>
+        <Text color="gray">  </Text>
+        <Text color="white">openai={operational.routing.openAIDefaultModel ?? "default"}</Text>
+        <Text color="gray"> aliases[{operational.routing.openAIAliases.join(",") || "-"}]</Text>
+      </Box>
+    </Box>
+  );
+}
+
+function ProviderBadge({
+  label,
+  status,
+  ready,
+}: {
+  label: string;
+  status: ProviderOperationalStatus;
+  ready: boolean;
+}) {
+  const color = !status.configured ? "gray" : ready ? "green" : "yellow";
+  const text = status.configured
+    ? `${label} ${status.healthy}/${status.accounts} healthy`
+    : `${label} not configured`;
+
+  return <Text color={color}>{text}</Text>;
 }
 
 // ─── Account row (two-line: status + utilization bars) ───────────────────────

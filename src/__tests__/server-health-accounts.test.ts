@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createHealthAccountViews } from "../proxy/server.js";
+import { createHealthAccountViews, createOperationalStatus } from "../proxy/server.js";
 import type { Account } from "../proxy/types.js";
 import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
 
@@ -61,5 +61,65 @@ describe("createHealthAccountViews", () => {
       enabled: true,
     });
     expect(views[1].rateLimits).toBeUndefined();
+  });
+});
+
+describe("createOperationalStatus", () => {
+  it("summarizes proxy capabilities without exposing secrets", () => {
+    const anthropicAccount = makeAnthropicAccount();
+    const openAIAccount: OpenAISubscriptionAccount = {
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access",
+      refreshToken: "openai-refresh",
+      expiresAt: Date.now() + 120_000,
+      enabled: true,
+    };
+
+    const status = createOperationalStatus({
+      mode: "standalone",
+      target: "https://api.anthropic.com",
+      authRequired: true,
+      accounts: createHealthAccountViews([anthropicAccount], [openAIAccount]),
+      modelRouting: {
+        anthropicDefaultModel: "claude-sonnet-4-6",
+        openAIDefaultModel: "gpt-5-codex",
+        anthropicAliases: { sonnet: "claude-sonnet-4-6" },
+        openAIAliases: { codex: "gpt-5-codex" },
+      },
+    });
+
+    expect(status).toEqual({
+      mode: "standalone",
+      target: "https://api.anthropic.com",
+      auth: { required: true },
+      providers: {
+        anthropic: { configured: true, accounts: 1, healthy: 1, enabled: 1 },
+        openai: { configured: true, accounts: 1, healthy: 1, enabled: 1 },
+      },
+      endpoints: {
+        health: "/cc-router/health",
+        accounts: "/cc-router/accounts",
+        messages: "/v1/messages",
+        responses: "/v1/responses",
+        models: "/v1/models",
+      },
+      routing: {
+        anthropicDefaultModel: "claude-sonnet-4-6",
+        openAIDefaultModel: "gpt-5-codex",
+        anthropicAliases: ["sonnet"],
+        openAIAliases: ["codex"],
+      },
+      capabilities: {
+        anthropicMessages: true,
+        openAIResponses: true,
+        crossProviderMessages: true,
+        dynamicModels: true,
+        accountManagement: true,
+      },
+    });
+
+    expect(JSON.stringify(status)).not.toContain("openai-access");
+    expect(JSON.stringify(status)).not.toContain("ant-access");
   });
 });

@@ -596,6 +596,11 @@ cc-router status
 ```text
  CC-Router  ·  standalone → api.anthropic.com  ·  up 2h 14m  ·  [q] quit
 
+ OPERATIONS  base http://localhost:3456  ·  auth protected  ·  models dynamic
+  Claude 2/2 healthy  OpenAI 1/1 healthy  ·  cross-route ready
+  endpoints /v1/messages /v1/responses /v1/models /cc-router/accounts
+  routing claude=claude-sonnet-4-6 aliases[sonnet]  openai=gpt-5-codex aliases[codex]
+
  ACCOUNTS  2/2 healthy
 
   ● max-account-1    ok      req   142  err   0  expires  6h 48m  last  2s ago
@@ -609,7 +614,7 @@ cc-router status
   14:22:45  ↻ max-account-1    refresh
 ```
 
-Press `q` to quit. Run with `--json` for non-interactive output.
+Press `q` to quit. Run with `--json` for non-interactive output; the JSON includes an `operational` block with capabilities, endpoints, provider readiness, auth status, and model routing. Secrets and account tokens are never included.
 
 ---
 
