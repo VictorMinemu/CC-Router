@@ -605,7 +605,12 @@ cc-router status
   Claude 2/2 healthy  OpenAI 1/1 healthy  ·  cross-route ready
   endpoints /v1/messages /v1/responses /v1/models /cc-router/accounts
   routing claude=claude-sonnet-4-6 aliases[sonnet]  openai=gpt-5-codex aliases[codex]
-  models cc-router models list  change cc-router models set
+  models [m] list/select  change [c] Claude [o] OpenAI
+
+ MODELS  [m/r] refresh  [↑/↓] select  [c] Claude default  [o] OpenAI default
+  current claude=claude-sonnet-4-6  openai=gpt-5-codex
+  ▶ anthropic/claude-sonnet-4-6 Claude
+    openai/gpt-5-codex OpenAI
 
  ACCOUNTS  2/2 healthy
 
@@ -621,6 +626,19 @@ cc-router status
 ```
 
 Press `q` to quit. Run with `--json` for non-interactive output; the JSON includes an `operational` block with capabilities, endpoints, provider readiness, auth status, and model routing. Secrets and account tokens are never included.
+
+The dashboard is also a control surface. In local mode it controls the local proxy; in client mode it controls the remote CC-Router configured by `cc-router client connect`.
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch focus between logs, accounts, and models |
+| `n` | Add a Claude account |
+| `e` | Enable/disable selected Claude account |
+| `w` / `s` | Change selected Claude account weekly/session cap |
+| `d` | Delete selected Claude account |
+| `m` / `r` | Load or refresh discovered provider models |
+| `c` | Set selected `anthropic/*` model as Claude default |
+| `o` | Set selected `openai/*` model as OpenAI default |
 
 List and change models without waiting for a package update:
 

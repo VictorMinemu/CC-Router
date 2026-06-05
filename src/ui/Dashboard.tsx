@@ -3,6 +3,8 @@ import { Box, Text, useInput, useApp } from "ink";
 import type { LogEntry } from "../proxy/stats.js";
 import { createAccountsApi } from "./accountsApi.js";
 import type { AccountsApi } from "./accountsApi.js";
+import { createModelsApi } from "./modelsApi.js";
+import type { ModelEntry, ModelsApi, ModelsStatus } from "./modelsApi.js";
 
 const POLL_INTERVAL_MS = 2_000;
 const LOG_VISIBLE = 20;
@@ -95,7 +97,7 @@ interface ProviderOperationalStatus {
   enabled: number;
 }
 
-type Focus = "logs" | "accounts";
+type Focus = "logs" | "accounts" | "models";
 type Mode = "view" | "editSession" | "editWeekly" | "confirmDelete";
 
 // ─── Dashboard component ──────────────────────────────────────────────────────
@@ -122,6 +124,10 @@ export function Dashboard({ port, baseUrl, authToken, onIntent }: DashboardProps
 
   const api = React.useMemo(
     () => createAccountsApi(resolvedBase, authToken),
+    [resolvedBase, authToken],
+  );
+  const modelsApi = React.useMemo(
+    () => createModelsApi(resolvedBase, authToken),
     [resolvedBase, authToken],
   );
 
@@ -184,6 +190,7 @@ export function Dashboard({ port, baseUrl, authToken, onIntent }: DashboardProps
       baseUrl={resolvedBase}
       lastUpdate={lastUpdate}
       api={api}
+      modelsApi={modelsApi}
       onIntent={onIntent}
     />
   );
@@ -211,10 +218,10 @@ function ErrorScreen({ error, port, retries }: { error: string; port: number; re
 // ─── Live dashboard ───────────────────────────────────────────────────────────
 
 function LiveDashboard({
-  data, port, baseUrl, lastUpdate, api, onIntent,
+  data, port, baseUrl, lastUpdate, api, modelsApi, onIntent,
 }: {
   data: HealthData; port: number; baseUrl: string; lastUpdate: number;
-  api: AccountsApi; onIntent?: (intent: "quit" | "addAccount") => void;
+  api: AccountsApi; modelsApi: ModelsApi; onIntent?: (intent: "quit" | "addAccount") => void;
 }) {
   const { exit } = useApp();
   const healthyCount = data.accounts.filter(a => a.healthy).length;
@@ -238,6 +245,14 @@ function LiveDashboard({
     : 0;
   const selectedAccount = data.accounts[selectedAccountIndex] ?? null;
   const selectedAccountIsAnthropic = selectedAccount?.provider !== "openai_subscription";
+
+  const [modelsStatus, setModelsStatus] = useState<ModelsStatus | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+  const modelRows = modelsStatus?.models ?? [];
+  const selectedModelIndex = selectedModelId !== null
+    ? Math.max(0, modelRows.findIndex(m => m.id === selectedModelId))
+    : 0;
+  const selectedModel = modelRows[selectedModelIndex] ?? null;
 
   // Inline text input state (for w / s keys)
   const [editBuffer, setEditBuffer] = useState("");
@@ -315,6 +330,45 @@ function LiveDashboard({
     }
   }, [selectedAccount, api, showBanner]);
 
+  const doLoadModels = useCallback(async () => {
+    try {
+      const status = await modelsApi.list();
+      setModelsStatus(status);
+      setSelectedModelId(status.models[0]?.id ?? null);
+      setFocus("models");
+      showBanner(`Loaded ${status.models.length} models`, "green");
+    } catch (err) {
+      showBanner(`Models error: ${errMsg(err)}`, "red");
+    }
+  }, [modelsApi, showBanner]);
+
+  const doSetSelectedModel = useCallback(async (provider: "claude" | "openai") => {
+    if (!selectedModel) return;
+    if (provider === "claude" && !selectedModel.id.startsWith("anthropic/")) {
+      showBanner("Select an anthropic/* model for Claude", "yellow");
+      return;
+    }
+    if (provider === "openai" && !selectedModel.id.startsWith("openai/")) {
+      showBanner("Select an openai/* model for OpenAI", "yellow");
+      return;
+    }
+
+    try {
+      const status = await modelsApi.setDefaults(
+        provider === "claude"
+          ? { claudeModel: selectedModel.id }
+          : { openAIModel: selectedModel.id },
+      );
+      setModelsStatus(previous => ({
+        routing: status.routing,
+        models: status.models.length > 0 ? status.models : previous?.models ?? [],
+      }));
+      showBanner(`${provider === "claude" ? "Claude" : "OpenAI"} default → ${selectedModel.id}`, "green");
+    } catch (err) {
+      showBanner(`Models error: ${errMsg(err)}`, "red");
+    }
+  }, [modelsApi, selectedModel, showBanner]);
+
   // ── Keyboard handler ──────────────────────────────────────────────────────
   useInput((input, key) => {
     // ── Text editing mode (w / s) ───────────────────────────────────────
@@ -363,13 +417,13 @@ function LiveDashboard({
     // The outer dashboardLoop reads `pendingIntent` after waitUntilExit().
     if (input === "q") { onIntent?.("quit"); exit(); return; }
     if (key.escape) {
-      if (focus === "accounts") { setFocus("logs"); return; }
+      if (focus === "accounts" || focus === "models") { setFocus("logs"); return; }
       onIntent?.("quit"); exit();
       return;
     }
 
     if (key.tab) {
-      setFocus(f => f === "logs" ? "accounts" : "logs");
+      setFocus(f => f === "logs" ? "accounts" : f === "accounts" ? "models" : "logs");
       return;
     }
 
@@ -411,6 +465,25 @@ function LiveDashboard({
       }
     }
 
+    if (focus === "models") {
+      if (key.upArrow) {
+        const next = Math.max(0, selectedModelIndex - 1);
+        setSelectedModelId(modelRows[next]?.id ?? null);
+      }
+      if (key.downArrow) {
+        const next = Math.min(modelRows.length - 1, selectedModelIndex + 1);
+        setSelectedModelId(modelRows[next]?.id ?? null);
+      }
+      if (input === "r") { void doLoadModels(); return; }
+      if (input === "c") { void doSetSelectedModel("claude"); return; }
+      if (input === "o") { void doSetSelectedModel("openai"); return; }
+    }
+
+    if (input === "m") {
+      void doLoadModels();
+      return;
+    }
+
     // n = add account — works regardless of focus.
     // Requires an onIntent handler because the outer loop runs the OAuth
     // flow after Ink unmounts; if none is wired, this key is a no-op.
@@ -440,7 +513,18 @@ function LiveDashboard({
 
       {data.operational && (
         <>
-          <OperationsPanel operational={data.operational} baseUrl={baseUrl} />
+          <OperationsPanel operational={data.operational} baseUrl={baseUrl} focus={focus} />
+          <Box marginTop={1} />
+        </>
+      )}
+
+      {(focus === "models" || modelsStatus) && (
+        <>
+          <ModelsPanel
+            status={modelsStatus}
+            selectedIndex={selectedModelIndex}
+            focused={focus === "models"}
+          />
           <Box marginTop={1} />
         </>
       )}
@@ -558,7 +642,7 @@ function LiveDashboard({
   );
 }
 
-function OperationsPanel({ operational, baseUrl }: { operational: OperationalStatus; baseUrl: string }) {
+function OperationsPanel({ operational, baseUrl, focus }: { operational: OperationalStatus; baseUrl: string; focus: Focus }) {
   const authLabel = operational.auth.required ? "protected" : "open";
   const authColor = operational.auth.required ? "green" : "yellow";
   const claudeReady = operational.capabilities.anthropicMessages;
@@ -604,10 +688,79 @@ function OperationsPanel({ operational, baseUrl }: { operational: OperationalSta
       </Box>
       <Box paddingLeft={2}>
         <Text color="gray">models </Text>
-        <Text color="cyan">cc-router models list</Text>
+        <Text color={focus === "models" ? "white" : "cyan"}>[m] list/select</Text>
         <Text color="gray">  change </Text>
-        <Text color="cyan">cc-router models set</Text>
+        <Text color={focus === "models" ? "white" : "cyan"}>[c] Claude [o] OpenAI</Text>
       </Box>
+    </Box>
+  );
+}
+
+function ModelsPanel({
+  status,
+  selectedIndex,
+  focused,
+}: {
+  status: ModelsStatus | null;
+  selectedIndex: number;
+  focused: boolean;
+}) {
+  const models = status?.models ?? [];
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text bold> MODELS  </Text>
+        <Text color="gray">[m/r] refresh  [↑/↓] select  [c] Claude default  [o] OpenAI default  [Esc] logs</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <Text color="gray">current </Text>
+        <Text color="white">claude={status?.routing.anthropicDefaultModel ?? "default"}</Text>
+        <Text color="gray">  </Text>
+        <Text color="white">openai={status?.routing.openAIDefaultModel ?? "default"}</Text>
+      </Box>
+      <Box marginTop={1} flexDirection="column">
+        {status === null
+          ? <Text color="gray">  Press [m] to load models from provider APIs</Text>
+          : models.length === 0
+            ? <Text color="gray">  No models discovered</Text>
+            : models.slice(0, 16).map((model, i) => (
+                <ModelRow
+                  key={model.id}
+                  model={model}
+                  selected={focused && i === selectedIndex}
+                  currentClaude={status.routing.anthropicDefaultModel}
+                  currentOpenAI={status.routing.openAIDefaultModel}
+                />
+              ))}
+      </Box>
+    </Box>
+  );
+}
+
+function ModelRow({
+  model,
+  selected,
+  currentClaude,
+  currentOpenAI,
+}: {
+  model: ModelEntry;
+  selected: boolean;
+  currentClaude?: string;
+  currentOpenAI?: string;
+}) {
+  const id = model.id;
+  const upstream = id.replace(/^anthropic\//, "").replace(/^openai\//, "");
+  const isClaudeDefault = currentClaude === upstream || id === "claude/default";
+  const isOpenAIDefault = currentOpenAI === upstream || id === "openai/default";
+  const providerColor = id.startsWith("openai/") ? "cyan" : id.startsWith("anthropic/") ? "magenta" : "gray";
+  const marker = isClaudeDefault ? " Claude" : isOpenAIDefault ? " OpenAI" : "";
+
+  return (
+    <Box>
+      <Text color={selected ? "cyan" : undefined}>{selected ? "▶" : " "}</Text>
+      <Text color={providerColor}> {id}</Text>
+      {marker && <Text color="green">{marker}</Text>}
     </Box>
   );
 }
