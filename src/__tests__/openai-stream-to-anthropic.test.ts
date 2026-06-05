@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { openAIStreamEventToAnthropicEvents } from "../protocol/openai-stream-to-anthropic.js";
+import { createOpenAIStreamToAnthropicNormalizer, openAIStreamEventToAnthropicEvents } from "../protocol/openai-stream-to-anthropic.js";
 
 describe("openAIStreamEventToAnthropicEvents", () => {
   it("converts common Responses stream events to Anthropic message stream events", () => {
@@ -66,6 +66,28 @@ describe("openAIStreamEventToAnthropicEvents", () => {
       },
       {
         type: "message_stop",
+      },
+    ]);
+  });
+
+  it("keeps text block state isolated per normalizer instance", () => {
+    const first = createOpenAIStreamToAnthropicNormalizer();
+    const second = createOpenAIStreamToAnthropicNormalizer();
+
+    first.convert({ type: "response.created", response: { id: "first" } });
+    second.convert({ type: "response.created", response: { id: "second" } });
+    first.convert({ type: "response.output_text.delta", delta: "a" });
+
+    expect(second.convert({ type: "response.output_text.delta", delta: "b" })).toEqual([
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "b" },
       },
     ]);
   });
