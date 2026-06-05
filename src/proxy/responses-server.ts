@@ -32,8 +32,21 @@ async function sendUpstreamResponse(upstream: globalThis.Response, res: Response
     return;
   }
 
-  const text = await upstream.text();
-  res.send(text);
+  if (contentType?.includes("text/event-stream")) {
+    res.setHeader("cache-control", "no-cache");
+    res.flushHeaders?.();
+  }
+
+  const reader = upstream.body.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) res.write(Buffer.from(value));
+    }
+  } finally {
+    res.end();
+  }
 }
 
 export function mountResponsesRoutes(app: Express, opts: ResponsesRoutesOptions): void {

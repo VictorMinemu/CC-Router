@@ -147,4 +147,67 @@ describe("mountResponsesRoutes", () => {
       });
     }
   });
+
+  it("streams upstream Responses SSE chunks without waiting for the full body", async () => {
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        enabled: true,
+      }),
+      forwardOpenAI: async () => new Response(
+        new ReadableStream({
+          start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode("data: {\"type\":\"response.created\"}\n\n"));
+            setTimeout(() => {
+              controller.enqueue(encoder.encode("data: {\"type\":\"response.completed\"}\n\n"));
+              controller.close();
+            }, 100);
+          },
+        }) as BodyInit,
+        {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        },
+      ),
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await Promise.race([
+        fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "openai/gpt-5.5", input: [], stream: true }),
+        }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("response headers were buffered")), 50)),
+      ]);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("response body is missing");
+
+      const firstChunk = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("first chunk was buffered")), 50)),
+      ]);
+      expect(new TextDecoder().decode(firstChunk.value)).toContain("response.created");
+      await reader.cancel();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
 });
