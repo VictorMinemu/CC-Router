@@ -602,6 +602,12 @@ function OperationsPanel({ operational, baseUrl }: { operational: OperationalSta
         <Text color="white">openai={operational.routing.openAIDefaultModel ?? "default"}</Text>
         <Text color="gray"> aliases[{operational.routing.openAIAliases.join(",") || "-"}]</Text>
       </Box>
+      <Box paddingLeft={2}>
+        <Text color="gray">models </Text>
+        <Text color="cyan">cc-router models list</Text>
+        <Text color="gray">  change </Text>
+        <Text color="cyan">cc-router models set</Text>
+      </Box>
     </Box>
   );
 }

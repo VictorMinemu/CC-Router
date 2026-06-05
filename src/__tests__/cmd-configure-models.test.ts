@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelRoutingUpdate } from "../cli/cmd-configure.js";
+import { buildModelRoutingUpdate } from "../protocol/model-routing-config.js";
 
 describe("buildModelRoutingUpdate", () => {
   it("stores provider defaults and practical aliases for selected models", () => {
@@ -38,5 +38,15 @@ describe("buildModelRoutingUpdate", () => {
     expect(next.openAIDefaultModel).toBe("gpt-5-codex");
     expect(next.openAIAliases).toEqual({ codex: "gpt-5-codex" });
     expect(next.anthropicDefaultModel).toBe("claude-sonnet-4-6");
+  });
+
+  it("normalizes provider-prefixed model ids before storing defaults", () => {
+    const next = buildModelRoutingUpdate({}, {
+      claudeModel: "anthropic/claude-sonnet-4-6",
+      openAIModel: "openai/gpt-5-codex",
+    });
+
+    expect(next.anthropicDefaultModel).toBe("claude-sonnet-4-6");
+    expect(next.openAIDefaultModel).toBe("gpt-5-codex");
   });
 });

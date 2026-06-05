@@ -1,10 +1,11 @@
-import type { Express, Request, Response } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import {
   fetchAnthropicModels,
   fetchOpenAICodexModels,
 } from "../providers/model-discovery.js";
 import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
 import type { ModelRoutingConfig } from "../protocol/model-ref.js";
+import { buildModelRoutingUpdate } from "../protocol/model-routing-config.js";
 import type { Account } from "./types.js";
 
 type FetchAnthropicModels = typeof fetchAnthropicModels;
@@ -24,6 +25,8 @@ interface OpenAIModel {
 export interface ModelsRouteOptions {
   getAnthropicAccounts: () => Account[];
   getOpenAIAccounts: () => OpenAISubscriptionAccount[];
+  getModelRouting?: () => ModelRoutingConfig;
+  setModelRouting?: (next: ModelRoutingConfig) => Promise<void>;
   prepareOpenAIAccount?: (account: OpenAISubscriptionAccount) => Promise<boolean>;
   fetchAnthropicModels?: FetchAnthropicModels;
   fetchOpenAIModels?: FetchOpenAIModels;
@@ -36,23 +39,69 @@ export function mountModelsRoute(app: Express, opts: ModelsRouteOptions): void {
   const prepareOpenAIAccount = opts.prepareOpenAIAccount ?? (async () => true);
 
   app.get("/v1/models", async (_req: Request, res: Response) => {
-    const discovered = await Promise.all([
-      discoverAnthropicModels(opts.getAnthropicAccounts(), fetchAnthropic),
-      discoverOpenAIModels(opts.getOpenAIAccounts(), prepareOpenAIAccount, fetchOpenAI),
-    ]);
-
-    const models = new Map<string, OpenAIModel>();
-    for (const model of discovered.flat()) {
-      models.set(model.id, model);
-    }
-    addConfiguredAliases(models, opts.modelRouting);
+    const models = await discoverModelList(opts, prepareOpenAIAccount, fetchAnthropic, fetchOpenAI);
 
     const body: OpenAIModelList = {
       object: "list",
-      data: [...models.values()].sort((a, b) => a.id.localeCompare(b.id)),
+      data: models,
     };
     res.json(body);
   });
+
+  app.get("/cc-router/models", async (_req: Request, res: Response) => {
+    res.json({
+      routing: currentModelRouting(opts),
+      models: await discoverModelList(opts, prepareOpenAIAccount, fetchAnthropic, fetchOpenAI),
+    });
+  });
+
+  app.patch("/cc-router/models", express.json({ limit: "16kb" }), async (req: Request, res: Response) => {
+    if (!opts.setModelRouting) {
+      res.status(501).json({ error: "Model routing updates are not available" });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { claudeModel?: unknown; openAIModel?: unknown };
+    if (body.claudeModel !== undefined && typeof body.claudeModel !== "string") {
+      res.status(400).json({ error: "claudeModel must be a string" });
+      return;
+    }
+    if (body.openAIModel !== undefined && typeof body.openAIModel !== "string") {
+      res.status(400).json({ error: "openAIModel must be a string" });
+      return;
+    }
+
+    const next = buildModelRoutingUpdate(currentModelRouting(opts), {
+      claudeModel: body.claudeModel,
+      openAIModel: body.openAIModel,
+    });
+    await opts.setModelRouting(next);
+    res.json({ routing: next });
+  });
+}
+
+async function discoverModelList(
+  opts: ModelsRouteOptions,
+  prepareOpenAIAccount: (account: OpenAISubscriptionAccount) => Promise<boolean>,
+  fetchAnthropic: FetchAnthropicModels,
+  fetchOpenAI: FetchOpenAIModels,
+): Promise<OpenAIModel[]> {
+  const discovered = await Promise.all([
+    discoverAnthropicModels(opts.getAnthropicAccounts(), fetchAnthropic),
+    discoverOpenAIModels(opts.getOpenAIAccounts(), prepareOpenAIAccount, fetchOpenAI),
+  ]);
+
+  const models = new Map<string, OpenAIModel>();
+  for (const model of discovered.flat()) {
+    models.set(model.id, model);
+  }
+  addConfiguredAliases(models, currentModelRouting(opts));
+
+  return [...models.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function currentModelRouting(opts: ModelsRouteOptions): ModelRoutingConfig {
+  return opts.getModelRouting?.() ?? opts.modelRouting ?? {};
 }
 
 async function discoverAnthropicModels(

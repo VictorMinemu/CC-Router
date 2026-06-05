@@ -91,16 +91,89 @@ describe("mountModelsRoute", () => {
       { id: "anthropic/claude-sonnet-4-6", object: "model", owned_by: "anthropic_subscription" },
     ]);
   });
+
+  it("returns discovered models with current routing from the management endpoint", async () => {
+    const app = express();
+
+    mountModelsRoute(app, {
+      getAnthropicAccounts: () => [makeAnthropicAccount()],
+      getOpenAIAccounts: () => [makeOpenAIAccount()],
+      fetchAnthropicModels: async () => ["claude-sonnet-4-6"],
+      fetchOpenAIModels: async () => ["gpt-5-codex"],
+      getModelRouting: () => ({
+        anthropicDefaultModel: "claude-sonnet-4-6",
+        openAIDefaultModel: "gpt-5-codex",
+      }),
+    });
+
+    const body = await getJson(app, "/cc-router/models");
+
+    expect(body).toEqual({
+      routing: {
+        anthropicDefaultModel: "claude-sonnet-4-6",
+        openAIDefaultModel: "gpt-5-codex",
+      },
+      models: [
+        { id: "anthropic/claude-sonnet-4-6", object: "model", owned_by: "anthropic_subscription" },
+        { id: "claude/default", object: "model", owned_by: "anthropic_subscription" },
+        { id: "openai/default", object: "model", owned_by: "openai_subscription" },
+        { id: "openai/gpt-5-codex", object: "model", owned_by: "openai_subscription" },
+      ],
+    });
+  });
+
+  it("updates model routing from the management endpoint", async () => {
+    const app = express();
+    let routing = {};
+
+    mountModelsRoute(app, {
+      getAnthropicAccounts: () => [],
+      getOpenAIAccounts: () => [],
+      getModelRouting: () => routing,
+      setModelRouting: async next => { routing = next; },
+    });
+
+    const body = await patchJson(app, "/cc-router/models", {
+      claudeModel: "claude-sonnet-4-6",
+      openAIModel: "openai/gpt-5-codex",
+    });
+
+    expect(body.routing).toEqual({
+      anthropicDefaultModel: "claude-sonnet-4-6",
+      openAIDefaultModel: "gpt-5-codex",
+      anthropicAliases: {
+        "claude/sonnet": "claude-sonnet-4-6",
+        sonnet: "claude-sonnet-4-6",
+      },
+      openAIAliases: {
+        default: "gpt-5-codex",
+        codex: "gpt-5-codex",
+      },
+    });
+    expect(routing).toEqual(body.routing);
+  });
 });
 
 async function getJson(app: express.Express, path: string): Promise<any> {
+  return requestJson(app, path, { method: "GET" });
+}
+
+async function patchJson(app: express.Express, path: string, body: unknown): Promise<any> {
+  return requestJson(app, path, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function requestJson(app: express.Express, path: string, init: RequestInit): Promise<any> {
   const server = createServer(app);
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
 
   try {
-    const res = await fetch(`http://127.0.0.1:${address.port}${path}`);
+    const res = await fetch(`http://127.0.0.1:${address.port}${path}`, init);
     expect(res.status).toBe(200);
     return await res.json();
   } finally {

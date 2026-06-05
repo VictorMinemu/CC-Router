@@ -287,6 +287,11 @@ cc-router revert             Same as stop --full
 cc-router status             Live dashboard (updates every 2s, press q to quit)
 cc-router status --json      Print current stats as JSON and exit
 
+cc-router models list        List models discovered live from provider APIs
+cc-router models list --json Print discovered models + routing as JSON
+cc-router models set --claude-model anthropic/claude-sonnet-4-6
+cc-router models set --openai-model openai/gpt-5-codex
+
 cc-router logs               View proxy logs (background mode)
 cc-router logs -f            Follow log output in real time
 cc-router logs --lines 100   Show last 100 lines
@@ -600,6 +605,7 @@ cc-router status
   Claude 2/2 healthy  OpenAI 1/1 healthy  ·  cross-route ready
   endpoints /v1/messages /v1/responses /v1/models /cc-router/accounts
   routing claude=claude-sonnet-4-6 aliases[sonnet]  openai=gpt-5-codex aliases[codex]
+  models cc-router models list  change cc-router models set
 
  ACCOUNTS  2/2 healthy
 
@@ -615,6 +621,16 @@ cc-router status
 ```
 
 Press `q` to quit. Run with `--json` for non-interactive output; the JSON includes an `operational` block with capabilities, endpoints, provider readiness, auth status, and model routing. Secrets and account tokens are never included.
+
+List and change models without waiting for a package update:
+
+```bash
+cc-router models list
+cc-router models set --claude-model anthropic/claude-sonnet-4-6
+cc-router models set --openai-model openai/gpt-5-codex
+```
+
+When the proxy is running, `models set` updates the live router and persists the new defaults. If the proxy is offline, it writes the configuration for the next start.
 
 ---
 

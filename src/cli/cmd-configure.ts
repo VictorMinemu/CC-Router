@@ -4,50 +4,7 @@ import { writeClaudeSettings, removeClaudeSettings, readClaudeProxySettings } fr
 import { writeCodexRouterConfig } from "../utils/codex-config.js";
 import { readConfig, writeConfig, generateProxySecret } from "../config/manager.js";
 import { PROXY_PORT, CLAUDE_SETTINGS_PATH } from "../config/paths.js";
-import type { ModelRoutingConfig } from "../protocol/model-ref.js";
-
-export interface ConfigureModelsOptions {
-  claudeModel?: string;
-  openAIModel?: string;
-}
-
-function cleanModel(model: string | undefined): string | undefined {
-  const trimmed = model?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-export function buildModelRoutingUpdate(
-  existing: ModelRoutingConfig | undefined,
-  opts: ConfigureModelsOptions,
-): ModelRoutingConfig {
-  const next: ModelRoutingConfig = {
-    ...existing,
-    anthropicAliases: { ...(existing?.anthropicAliases ?? {}) },
-    openAIAliases: { ...(existing?.openAIAliases ?? {}) },
-  };
-
-  const claudeModel = cleanModel(opts.claudeModel);
-  if (claudeModel) {
-    next.anthropicDefaultModel = claudeModel;
-    next.anthropicAliases = {
-      ...next.anthropicAliases,
-      "claude/sonnet": claudeModel,
-      sonnet: claudeModel,
-    };
-  }
-
-  const openAIModel = cleanModel(opts.openAIModel)?.replace(/^openai\//, "");
-  if (openAIModel) {
-    next.openAIDefaultModel = openAIModel;
-    next.openAIAliases = {
-      ...next.openAIAliases,
-      default: openAIModel,
-      codex: openAIModel,
-    };
-  }
-
-  return next;
-}
+import { buildModelRoutingUpdate } from "../protocol/model-routing-config.js";
 
 export function registerConfigure(program: Command): void {
   program

@@ -7,7 +7,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool, EmptyPoolError } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, writeConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
@@ -519,8 +519,15 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   mountModelsRoute(app, {
     getAnthropicAccounts: () => pool.getAll(),
     getOpenAIAccounts: () => openAIAccounts,
+    getModelRouting: () => modelRouting,
+    setModelRouting: async (next) => {
+      Object.keys(modelRouting).forEach(key => {
+        delete modelRouting[key as keyof typeof modelRouting];
+      });
+      Object.assign(modelRouting, next);
+      writeConfig({ ...readConfig(), modelRouting: next });
+    },
     prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
-    modelRouting,
   });
 
   mountResponsesRoutes(app, {
