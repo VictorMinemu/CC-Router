@@ -62,6 +62,17 @@ describe("createHealthAccountViews", () => {
     });
     expect(views[1].rateLimits).toBeUndefined();
   });
+
+  it("does not count disabled Anthropic accounts as healthy", () => {
+    const disabled = { ...makeAnthropicAccount(), enabled: false };
+
+    const views = createHealthAccountViews([disabled], []);
+
+    expect(views[0]).toMatchObject({
+      enabled: false,
+      healthy: false,
+    });
+  });
 });
 
 describe("createOperationalStatus", () => {

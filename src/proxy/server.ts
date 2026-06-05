@@ -7,7 +7,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool, EmptyPoolError } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, writeConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, writeConfig, serialize, getProxyRequestTimeoutMs, migrateLegacyAccountProviders, setProviderAccountsEnabled } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
@@ -154,7 +154,7 @@ function publicAnthropicAccountView(a: Account): HealthAccountView {
     enabled: a.enabled,
     sessionLimitPercent: a.sessionLimitPercent,
     weeklyLimitPercent: a.weeklyLimitPercent,
-    healthy: a.healthy,
+    healthy: a.enabled !== false && a.healthy,
     busy: a.busy,
     requestCount: a.requestCount,
     errorCount: a.errorCount,
@@ -254,6 +254,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     process.exit(1);
   }
 
+  migrateLegacyAccountProviders(accountsPath);
   const accounts = accountsPath ? readAccountsFromPath(accountsPath) : loadAccounts();
   const openAIAccounts = loadOpenAIAccounts(accountsPath);
   if (accounts.length === 0 && openAIAccounts.length === 0) {
@@ -359,7 +360,60 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   // Shape returned to clients — NEVER includes access/refresh tokens.
   accountsRouter.get("/", (_req, res) => {
-    res.json({ accounts: pool.getAll().map(publicAnthropicAccountView) });
+    res.json({ accounts: createHealthAccountViews(pool.getAll(), openAIAccounts) });
+  });
+
+  accountsRouter.patch("/providers/:provider", (req, res) => {
+    const providerParam = req.params.provider;
+    if (providerParam !== "anthropic_subscription" && providerParam !== "openai_subscription") {
+      res.status(400).json({ error: "provider must be anthropic_subscription or openai_subscription" });
+      return;
+    }
+
+    const body = (req.body ?? {}) as { enabled?: unknown };
+    if (typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "enabled must be boolean" });
+      return;
+    }
+
+    const provider = providerParam;
+    const snapshots = {
+      anthropic: pool.getAll().map(a => ({ id: a.id, enabled: a.enabled })),
+      openai: openAIAccounts.map(a => ({ id: a.id, enabled: a.enabled })),
+    };
+
+    const applyRuntime = (enabled: boolean) => {
+      if (provider === "anthropic_subscription") {
+        for (const account of pool.getAll()) {
+          pool.updateAccount(account.id, { enabled });
+        }
+      } else {
+        for (const account of openAIAccounts) {
+          account.enabled = enabled;
+        }
+      }
+    };
+
+    const rollback = () => {
+      for (const snapshot of snapshots.anthropic) {
+        pool.updateAccount(snapshot.id, { enabled: snapshot.enabled });
+      }
+      for (const snapshot of snapshots.openai) {
+        const account = openAIAccounts.find(a => a.id === snapshot.id);
+        if (account) account.enabled = snapshot.enabled;
+      }
+    };
+
+    applyRuntime(body.enabled);
+    try {
+      const changed = setProviderAccountsEnabled(provider, body.enabled, accountsPath);
+      res.json({ provider, enabled: body.enabled, changed });
+    } catch (err) {
+      rollback();
+      const message = err instanceof Error ? err.message : String(err);
+      logError("accounts", 0, `Failed to persist provider state: ${message}`);
+      res.status(500).json({ error: `Failed to persist accounts.json: ${message}` });
+    }
   });
 
   /**

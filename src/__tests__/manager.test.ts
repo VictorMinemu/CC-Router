@@ -25,6 +25,9 @@ import {
   upsertAccountRecord,
   removeAccountRecordById,
   saveOpenAIAccounts,
+  migrateLegacyAccountProviders,
+  setProviderAccountsEnabled,
+  serialize,
   loadAccounts,
   loadOpenAIAccounts,
   readAccountsFromPath,
@@ -116,6 +119,83 @@ describe("writeAccountsAtomic", () => {
     const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
     expect(parsed).toHaveLength(3);
     expect(parsed.map((r: { id: string }) => r.id)).toEqual(["account-1", "account-2", "account-3"]);
+  });
+});
+
+describe("migrateLegacyAccountProviders", () => {
+  it("tags legacy providerless records as Anthropic subscription accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid"],
+      },
+    ]);
+
+    const migrated = migrateLegacyAccountProviders();
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(migrated).toBe(true);
+    expect(parsed[0]).toMatchObject({
+      id: "max-account-1",
+      provider: "anthropic_subscription",
+    });
+    expect(parsed[1].provider).toBe("openai_subscription");
+  });
+
+  it("does not rewrite already tagged accounts", () => {
+    writeAccountsAtomic([{ ...sampleRecord, provider: "anthropic_subscription" }]);
+    const before = fs.readFileSync(accountsPath(), "utf-8");
+
+    const migrated = migrateLegacyAccountProviders();
+
+    expect(migrated).toBe(false);
+    expect(fs.readFileSync(accountsPath(), "utf-8")).toBe(before);
+  });
+});
+
+describe("setProviderAccountsEnabled", () => {
+  it("updates all accounts for the selected provider while preserving the other provider", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      { ...sampleRecord, id: "max-account-2", provider: "anthropic_subscription", enabled: true },
+      {
+        id: "openai-primary",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid"],
+        enabled: true,
+      },
+    ]);
+
+    const changed = setProviderAccountsEnabled("anthropic_subscription", false);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(changed).toBe(2);
+    expect(parsed.map((record: { id: string; enabled?: boolean }) => [record.id, record.enabled])).toEqual([
+      ["max-account-1", false],
+      ["max-account-2", false],
+      ["openai-primary", true],
+    ]);
+  });
+
+  it("treats providerless legacy accounts as Anthropic when updating provider state", () => {
+    writeAccountsAtomic([sampleRecord]);
+
+    const changed = setProviderAccountsEnabled("anthropic_subscription", false);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(changed).toBe(1);
+    expect(parsed[0]).toMatchObject({
+      provider: "anthropic_subscription",
+      enabled: false,
+    });
   });
 });
 
@@ -323,6 +403,18 @@ describe("loadAccounts", () => {
     ]);
 
     expect(loadAccounts().map(a => a.id)).toEqual(["max-account-1"]);
+  });
+});
+
+describe("serialize", () => {
+  it("persists Anthropic provider tags so legacy accounts stay migrated after save", () => {
+    writeAccountsAtomic([sampleRecord]);
+    const [account] = loadAccounts();
+
+    writeAnthropicAccountsPreservingOtherProviders(serialize([account]));
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed[0].provider).toBe("anthropic_subscription");
   });
 });
 

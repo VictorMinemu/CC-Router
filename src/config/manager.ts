@@ -77,6 +77,42 @@ export function removeAccountRecordById(id: string): AccountRecord | null {
   return removed;
 }
 
+export type AccountProvider = "anthropic_subscription" | "openai_subscription";
+
+function normalizeAccountProvider(record: AccountRecord): AccountProvider {
+  return record.provider === "openai_subscription"
+    ? "openai_subscription"
+    : "anthropic_subscription";
+}
+
+export function migrateLegacyAccountProviders(path = ACCOUNTS_PATH): boolean {
+  const records = readRawFromPath(path) as AccountRecord[];
+  let changed = false;
+  const migrated = records.map(record => {
+    if (record.provider !== undefined) return record;
+    changed = true;
+    return { ...record, provider: "anthropic_subscription" as const };
+  });
+  if (changed) writeAccountsAtomicToPath(path, migrated);
+  return changed;
+}
+
+export function setProviderAccountsEnabled(
+  provider: AccountProvider,
+  enabled: boolean,
+  path = ACCOUNTS_PATH,
+): number {
+  const records = readRawFromPath(path) as AccountRecord[];
+  let changed = 0;
+  const next = records.map(record => {
+    if (normalizeAccountProvider(record) !== provider) return record;
+    changed++;
+    return { ...record, provider: normalizeAccountProvider(record), enabled };
+  });
+  if (changed > 0) writeAccountsAtomicToPath(path, next);
+  return changed;
+}
+
 /** Deserialize flat AccountRecord[] from the default path into runtime Account[] */
 export function loadAccounts(): Account[] {
   return deserialize(readAccountsRaw() as AccountRecord[]);
@@ -238,6 +274,7 @@ function deserialize(records: AccountRecord[]): Account[] {
 export function serialize(accounts: Account[]): AccountRecord[] {
   return accounts.map(a => ({
     id: a.id,
+    provider: "anthropic_subscription",
     accessToken: a.tokens.accessToken,
     refreshToken: a.tokens.refreshToken,
     expiresAt: a.tokens.expiresAt,

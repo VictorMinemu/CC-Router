@@ -300,6 +300,25 @@ function LiveDashboard({
     }
   }, [selectedAccount, api, showBanner]);
 
+  const doToggleProvider = useCallback(async (provider: "anthropic_subscription" | "openai_subscription") => {
+    const providerStatus = provider === "anthropic_subscription"
+      ? data.operational?.providers.anthropic
+      : data.operational?.providers.openai;
+    const label = provider === "anthropic_subscription" ? "Claude" : "OpenAI";
+    if (!providerStatus?.configured || providerStatus.accounts === 0) {
+      showBanner(`${label} accounts are not configured`, "yellow");
+      return;
+    }
+
+    const enabled = providerStatus.enabled < providerStatus.accounts;
+    try {
+      await api.setProviderEnabled(provider, enabled);
+      showBanner(`${label} accounts → ${enabled ? "enabled" : "disabled"}`, enabled ? "green" : "yellow");
+    } catch (err) {
+      showBanner(`Error: ${errMsg(err)}`, "red");
+    }
+  }, [api, data.operational, showBanner]);
+
   const doSetLimit = useCallback(async (field: "sessionLimitPercent" | "weeklyLimitPercent", value: number) => {
     if (!selectedAccount) return;
     if (selectedAccount.provider === "openai_subscription") {
@@ -451,6 +470,8 @@ function LiveDashboard({
 
       // Account actions (only when focus = accounts)
       if (input === "e") { void doToggleEnabled(); return; }
+      if (input === "a") { void doToggleProvider("anthropic_subscription"); return; }
+      if (input === "o") { void doToggleProvider("openai_subscription"); return; }
       if (input === "w") {
         if (!selectedAccountIsAnthropic) { showBanner("OpenAI accounts do not use Anthropic caps", "yellow"); return; }
         setMode("editWeekly"); setEditBuffer(""); return;
@@ -540,7 +561,7 @@ function LiveDashboard({
           </Text>
           <Text color="gray">{"   "}</Text>
           <Text color={focus === "accounts" ? "white" : "gray"}>
-            [Tab] focus  [e] toggle  [w] 7d cap  [s] 5h cap  [n] add  [d] delete
+            [Tab] focus  [e] toggle  [a] Claude all  [o] OpenAI all  [w] 7d cap  [s] 5h cap  [n] add  [d] delete
           </Text>
         </Box>
 
