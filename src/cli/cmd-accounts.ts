@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { loadAccounts, accountsFileExists, writeAccountsAtomic, serialize } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, accountsFileExists, writeAccountsAtomic, serialize, upsertAccountRecord } from "../config/manager.js";
 import { saveAccounts } from "../proxy/token-refresher.js";
 import { formatExpiry, redactToken } from "../utils/token-extractor.js";
 import { PROXY_PORT } from "../config/paths.js";
+import { createOpenAIAccountRecord } from "../providers/openai/account-record.js";
 
 export function registerAccounts(program: Command): void {
   const accounts = program
@@ -25,7 +26,8 @@ export function registerAccounts(program: Command): void {
       }
 
       const stored = loadAccounts();
-      if (stored.length === 0) {
+      const openAIStored = loadOpenAIAccounts();
+      if (stored.length === 0 && openAIStored.length === 0) {
         console.log(chalk.yellow("accounts.json is empty. Run: cc-router setup"));
         return;
       }
@@ -35,7 +37,7 @@ export function registerAccounts(program: Command): void {
         return;
       }
 
-      console.log(chalk.bold(`\n  Accounts (${stored.length} configured)\n`));
+      console.log(chalk.bold(`\n  Accounts (${stored.length + openAIStored.length} configured)\n`));
 
       if (liveStats) {
         console.log(chalk.green("  ● Proxy is running — showing live stats\n"));
@@ -69,6 +71,17 @@ export function registerAccounts(program: Command): void {
             `  scopes: ${chalk.gray(a.tokens.scopes.join(" "))}`
           );
         }
+        for (const a of openAIStored) {
+          const exp = a.expiresAt > Date.now()
+            ? chalk.yellow(formatExpiry(a.expiresAt))
+            : chalk.red("EXPIRED");
+          console.log(
+            `  ${chalk.bold(a.id.padEnd(24))}` +
+            `  ${chalk.magenta("openai".padEnd(10))}` +
+            `  ${redactToken(a.accessToken).padEnd(26)}` +
+            `  expires: ${exp}`
+          );
+        }
       }
 
       console.log();
@@ -98,6 +111,52 @@ export function registerAccounts(program: Command): void {
       saveAccounts(merged);
       console.log(chalk.green(`\n✓ Account "${account.id}" added (${merged.length} total).\n`));
       console.log(chalk.gray("  Restart the proxy to load the new account: cc-router start\n"));
+    });
+
+  // ── accounts add-openai ──────────────────────────────────────────────────
+  accounts
+    .command("add-openai")
+    .description("Add an OpenAI ChatGPT/Codex subscription account manually")
+    .action(async () => {
+      const { input, password } = await import("@inquirer/prompts");
+
+      const id = await input({
+        message: "OpenAI account ID:",
+        default: `openai-account-${loadOpenAIAccounts().length + 1}`,
+        validate: (v) => /^[a-zA-Z0-9_-]+$/.test(v) || "Only letters, numbers, _ and - allowed",
+      });
+      const accessToken = await password({
+        message: "OpenAI access token:",
+        mask: "*",
+        validate: (v) => v.trim().length > 0 || "Access token is required",
+      });
+      const refreshToken = await password({
+        message: "OpenAI refresh token:",
+        mask: "*",
+        validate: (v) => v.trim().length > 0 || "Refresh token is required",
+      });
+      const expiresAt = await input({
+        message: "Access token expiry (Unix ms):",
+        default: String(Date.now() + 60 * 60 * 1000),
+        validate: (v) => Number.isFinite(Number(v)) && Number(v) > 0 || "Enter a positive Unix timestamp in milliseconds",
+      });
+      const scopes = await input({
+        message: "Scopes:",
+        default: "openid profile email offline_access",
+      });
+
+      const record = createOpenAIAccountRecord({
+        id,
+        accessToken,
+        refreshToken,
+        expiresAt,
+        scopes,
+      });
+      upsertAccountRecord(record);
+
+      console.log(chalk.green(`\n✓ OpenAI account "${record.id}" saved.\n`));
+      console.log(chalk.gray("  Restart the proxy to load the new account: cc-router start\n"));
+      console.log(chalk.yellow("  Treat this as experimental until the OAuth login wizard lands.\n"));
     });
 
   // ── accounts remove ───────────────────────────────────────────────────────
