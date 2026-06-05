@@ -36,6 +36,18 @@ export async function refreshOpenAISubscriptionToken(account: OpenAISubscription
   }
 }
 
+export async function prepareOpenAIAccountForRequest(
+  account: OpenAISubscriptionAccount,
+  allAccounts: OpenAISubscriptionAccount[],
+  saveAccounts: (accounts: OpenAISubscriptionAccount[]) => void,
+): Promise<boolean> {
+  if (!needsOpenAIRefresh(account)) return true;
+
+  const ok = await refreshOpenAISubscriptionToken(account);
+  if (ok) saveAccounts(allAccounts);
+  return ok;
+}
+
 async function doRefresh(account: OpenAISubscriptionAccount): Promise<boolean> {
   const body = new URLSearchParams({
     grant_type: "refresh_token",
