@@ -3,6 +3,8 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { selectRoute } from "../providers/route-selector.js";
 import { anthropicToOpenAIResponses } from "../protocol/anthropic-to-openai.js";
 import { openAIResponseToAnthropicMessage } from "../protocol/openai-response-to-anthropic.js";
+import { createOpenAIStreamToAnthropicNormalizer } from "../protocol/openai-stream-to-anthropic.js";
+import { encodeSseEvent, parseSseLines } from "../protocol/sse.js";
 import { forwardOpenAICodexResponse } from "../providers/openai/codex-transport.js";
 import type { AnthropicMessagesRequest } from "../protocol/anthropic-types.js";
 import type { OpenAIResponseCompleted } from "../protocol/openai-responses-types.js";
@@ -31,6 +33,11 @@ function isAnthropicMessagesRequest(value: unknown): value is AnthropicMessagesR
 
 async function sendOpenAIAsAnthropic(upstream: globalThis.Response, res: Response): Promise<void> {
   const contentType = upstream.headers.get("content-type") ?? "";
+  if (contentType.includes("text/event-stream")) {
+    await sendOpenAIStreamAsAnthropic(upstream, res);
+    return;
+  }
+
   if (!contentType.includes("application/json")) {
     res.status(upstream.status);
     res.setHeader("content-type", contentType || "text/plain");
@@ -40,6 +47,50 @@ async function sendOpenAIAsAnthropic(upstream: globalThis.Response, res: Respons
 
   const json = await upstream.json() as OpenAIResponseCompleted;
   res.status(upstream.status).json(openAIResponseToAnthropicMessage(json));
+}
+
+async function sendOpenAIStreamAsAnthropic(upstream: globalThis.Response, res: Response): Promise<void> {
+  res.status(upstream.status);
+  res.setHeader("content-type", "text/event-stream");
+  res.setHeader("cache-control", "no-cache");
+  res.flushHeaders?.();
+
+  const normalizer = createOpenAIStreamToAnthropicNormalizer();
+  const reader = upstream.body?.getReader();
+  if (!reader) {
+    res.end();
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let remainder = "";
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      const parsed = parseSseLines(remainder + decoder.decode(value, { stream: true }));
+      remainder = parsed.remainder;
+      for (const event of parsed.events) {
+        for (const mapped of normalizer.convert(event as Parameters<typeof normalizer.convert>[0])) {
+          res.write(encodeSseEvent(mapped));
+        }
+      }
+    }
+
+    const tail = decoder.decode();
+    if (tail || remainder) {
+      const parsed = parseSseLines(remainder + tail + "\n");
+      for (const event of parsed.events) {
+        for (const mapped of normalizer.convert(event as Parameters<typeof normalizer.convert>[0])) {
+          res.write(encodeSseEvent(mapped));
+        }
+      }
+    }
+  } finally {
+    res.end();
+  }
 }
 
 export function mountMessagesCrossProviderRoute(
