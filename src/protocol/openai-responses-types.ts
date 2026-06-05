@@ -50,3 +50,19 @@ export interface OpenAIResponsesRequest {
   max_output_tokens?: number;
   stream?: boolean;
 }
+
+export interface OpenAIResponseOutputMessage {
+  type: "message";
+  role?: "assistant";
+  content: OpenAIOutputText[];
+}
+
+export interface OpenAIResponseCompleted {
+  id: string;
+  model?: string;
+  output?: OpenAIResponseOutputMessage[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
