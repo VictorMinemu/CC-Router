@@ -4,6 +4,8 @@ import { CONFIG_DIR, ACCOUNTS_PATH, CONFIG_PATH } from "./paths.js";
 import type { Account, AccountRecord } from "../proxy/types.js";
 import { DEFAULT_RATE_LIMITS, ACCOUNT_USER_DEFAULTS, clampPercent } from "../proxy/types.js";
 
+export const DEFAULT_PROXY_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
@@ -78,6 +80,10 @@ export interface RunPreferences {
 
 export interface ProxyConfig {
   proxySecret?: string;
+  /** Upstream proxy request timeout in milliseconds. Default: 300000 (5 minutes). */
+  proxyRequestTimeoutMs?: number;
+  /** Deprecated typo-compatible alias for proxyRequestTimeoutMs. */
+  proxyRequesTime?: number;
   /** Auto-update on patch/minor releases. Default: true (enabled). Set to false to disable. */
   autoUpdate?: boolean;
   /** Present only when this machine is in "client" mode (connected to a remote CC-Router) */
@@ -102,10 +108,28 @@ export function readConfig(): ProxyConfig {
   }
 }
 
+export function getProxyRequestTimeoutMs(): number {
+  const { proxyRequestTimeoutMs, proxyRequesTime } = readConfig();
+  const timeoutMs = proxyRequestTimeoutMs ?? proxyRequesTime;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_PROXY_REQUEST_TIMEOUT_MS;
+}
+
+function normalizeProxyConfig(cfg: ProxyConfig): ProxyConfig {
+  const { proxyRequesTime, ...normalized } = cfg;
+  const timeoutMs = normalized.proxyRequestTimeoutMs ?? proxyRequesTime;
+  normalized.proxyRequestTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : DEFAULT_PROXY_REQUEST_TIMEOUT_MS;
+  return normalized;
+}
+
 export function writeConfig(cfg: ProxyConfig): void {
   ensureConfigDir();
   const tmp = CONFIG_PATH + ".tmp";
-  writeFileSync(tmp, JSON.stringify(cfg, null, 2), "utf-8");
+  writeFileSync(tmp, JSON.stringify(normalizeProxyConfig(cfg), null, 2), "utf-8");
   renameSync(tmp, CONFIG_PATH);
 }
 

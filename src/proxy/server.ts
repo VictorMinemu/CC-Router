@@ -7,7 +7,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool, EmptyPoolError } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize } from "../config/manager.js";
+import { loadAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
@@ -126,6 +126,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   startRefreshLoop(accounts);
 
   const app = express();
+  const proxyRequestTimeoutMs = getProxyRequestTimeoutMs();
 
   // ─── Proxy auth middleware ─────────────────────────────────────────────────
   // If a proxySecret is configured, all requests must present it as EITHER
@@ -372,8 +373,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     // pathRewrite restores it so the proxy forwards /v1/messages, not /messages.
     pathRewrite: (path) => `/v1${path}`,
     // Long timeouts — Claude Code requests can be >5min (thinking, agents)
-    proxyTimeout: 5 * 60 * 1000,
-    timeout: 5 * 60 * 1000,
+    proxyTimeout: proxyRequestTimeoutMs,
+    timeout: proxyRequestTimeoutMs,
     on: {
       proxyReq: (proxyReq, req) => {
         const account = (req as Request)._ccAccount;

@@ -10,6 +10,7 @@ const MOCK_DIR = vi.hoisted(() => {
 vi.mock("../config/paths.js", () => ({
   CONFIG_DIR: MOCK_DIR,
   ACCOUNTS_PATH: `${MOCK_DIR}/accounts.json`,
+  CONFIG_PATH: `${MOCK_DIR}/config.json`,
   CLAUDE_SETTINGS_PATH: `${MOCK_DIR}/settings.json`,
   PROXY_PORT: 3456,
   LITELLM_PORT: 4000,
@@ -22,6 +23,8 @@ import {
   writeAccountsAtomic,
   loadAccounts,
   readAccountsFromPath,
+  writeConfig,
+  getProxyRequestTimeoutMs,
 } from "../config/manager.js";
 
 const accountsPath = () => `${MOCK_DIR}/accounts.json`;
@@ -158,5 +161,40 @@ describe("readAccountsFromPath", () => {
   it("returns empty array for a non-existent path", () => {
     const missing = `${MOCK_DIR}/does-not-exist.json`;
     expect(readAccountsFromPath(missing)).toEqual([]);
+  });
+});
+
+describe("getProxyRequestTimeoutMs", () => {
+  it("reads proxyRequestTimeoutMs from config.json", () => {
+    writeConfig({ proxyRequestTimeoutMs: 120_000 });
+
+    expect(getProxyRequestTimeoutMs()).toBe(120_000);
+  });
+
+  it("defaults to five minutes when config.json does not define a timeout", () => {
+    expect(getProxyRequestTimeoutMs()).toBe(300_000);
+  });
+
+  it("accepts proxyRequesTime as a backward-compatible alias", () => {
+    writeConfig({ proxyRequesTime: 180_000 });
+
+    expect(getProxyRequestTimeoutMs()).toBe(180_000);
+  });
+
+  it("writes proxyRequestTimeoutMs when creating config.json", () => {
+    writeConfig({ proxySecret: "secret" });
+
+    const parsed = JSON.parse(fs.readFileSync(`${MOCK_DIR}/config.json`, "utf-8"));
+    expect(parsed.proxySecret).toBe("secret");
+    expect(parsed.proxyRequestTimeoutMs).toBe(300_000);
+    expect(parsed.proxyRequesTime).toBeUndefined();
+  });
+
+  it("migrates proxyRequesTime to proxyRequestTimeoutMs when writing config.json", () => {
+    writeConfig({ proxyRequesTime: 180_000 });
+
+    const parsed = JSON.parse(fs.readFileSync(`${MOCK_DIR}/config.json`, "utf-8"));
+    expect(parsed.proxyRequestTimeoutMs).toBe(180_000);
+    expect(parsed.proxyRequesTime).toBeUndefined();
   });
 });
