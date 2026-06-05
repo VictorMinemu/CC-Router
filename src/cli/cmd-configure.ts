@@ -1,13 +1,15 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { writeClaudeSettings, removeClaudeSettings, readClaudeProxySettings } from "../utils/claude-config.js";
+import { writeCodexRouterConfig } from "../utils/codex-config.js";
 import { readConfig, writeConfig, generateProxySecret } from "../config/manager.js";
 import { PROXY_PORT, CLAUDE_SETTINGS_PATH } from "../config/paths.js";
 
 export function registerConfigure(program: Command): void {
   program
     .command("configure")
-    .description("Update ~/.claude/settings.json to point to the proxy (or remove the config)")
+    .description("Configure Claude Code or Codex to point to the proxy")
+    .argument("[target]", "Optional target to configure: codex")
     .option("--remove", "Remove cc-router settings from ~/.claude/settings.json")
     .option("--port <port>", "Proxy port to configure", String(PROXY_PORT))
     .option("--show", "Show current Claude Code proxy settings")
@@ -16,7 +18,7 @@ export function registerConfigure(program: Command): void {
     .option("--remove-password", "Remove proxy password protection (open access)")
     .option("--enable-auto-update", "Enable automatic updates for the proxy")
     .option("--disable-auto-update", "Disable automatic updates for the proxy")
-    .action((opts: {
+    .action((target: string | undefined, opts: {
       remove?: boolean;
       port: string;
       show?: boolean;
@@ -26,6 +28,25 @@ export function registerConfigure(program: Command): void {
       enableAutoUpdate?: boolean;
       disableAutoUpdate?: boolean;
     }) => {
+      if (target === "codex") {
+        const port = parseInt(opts.port, 10);
+        const result = writeCodexRouterConfig({
+          baseUrl: `http://localhost:${port}/v1`,
+          tokenEnvKey: "CC_ROUTER_TOKEN",
+        });
+        console.log(chalk.green(`✓ Updated ${result.path}`));
+        console.log(chalk.gray("  CODEX provider configured:"));
+        console.log(chalk.gray("    model_provider = cc-router"));
+        console.log(chalk.gray(`    base_url       = http://localhost:${port}/v1`));
+        console.log(chalk.gray("    env_key        = CC_ROUTER_TOKEN"));
+        return;
+      }
+
+      if (target !== undefined) {
+        console.error(chalk.red(`Unknown configure target: ${target}`));
+        process.exit(1);
+      }
+
       if (opts.show) {
         const current = readClaudeProxySettings();
         if (current.baseUrl) {
