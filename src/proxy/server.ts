@@ -19,6 +19,7 @@ import { writePid, removePid } from "../daemon/pid.js";
 import type { Account, AccountRateLimits, AccountRecord } from "./types.js";
 import { createOpenAIAccountPicker } from "../providers/openai/account-pool.js";
 import { mountResponsesRoutes } from "./responses-server.js";
+import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
 import chalk from "chalk";
 
 // Augment Request to carry the selected account and pending log entry
@@ -371,6 +372,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getOpenAIAccount: pickOpenAIAccount,
   });
 
+  mountMessagesCrossProviderRoute(app, {
+    getOpenAIAccount: pickOpenAIAccount,
+  });
+
   // ─── Proxy middleware ──────────────────────────────────────────────────────
   // IMPORTANT: selfHandleResponse must be false (default) for SSE streaming to
   // work transparently. Setting it to true breaks streaming.
@@ -414,6 +419,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         //   anthropic-version         — required by Anthropic API
         //   X-Claude-Code-Session-Id  — session aggregation header sent by Claude Code
         //   content-type              — always application/json
+        if ((req as Request)._ccRawBody) {
+          proxyReq.setHeader("content-length", Buffer.byteLength((req as Request)._ccRawBody!));
+          proxyReq.write((req as Request)._ccRawBody);
+        }
       },
 
       proxyRes: (proxyRes, req) => {
