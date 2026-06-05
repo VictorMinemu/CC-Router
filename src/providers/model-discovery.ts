@@ -26,7 +26,7 @@ export async function fetchAnthropicModels(
   return fetchModels(ANTHROPIC_MODELS_ENDPOINT, {
     method: "GET",
     headers: {
-      "x-api-key": account.tokens.accessToken,
+      authorization: `Bearer ${account.tokens.accessToken}`,
       "anthropic-version": "2023-06-01",
       "anthropic-beta": "oauth-2025-04-20",
     },
