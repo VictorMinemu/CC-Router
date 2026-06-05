@@ -289,6 +289,7 @@ cc-router logs --lines 100   Show last 100 lines
 
 cc-router accounts list      List configured accounts (live stats if proxy is running)
 cc-router accounts add       Add an account interactively
+cc-router accounts login-openai  Sign in to OpenAI subscription auth with device code
 cc-router accounts add-openai  Add an OpenAI subscription account manually (experimental)
 cc-router accounts remove <id>  Remove an account
 
@@ -400,7 +401,15 @@ OpenAI subscription account records are separated from Claude accounts with `pro
 
 The OAuth login wizard for adding these records is still being built. Until then, treat this as an experimental developer path, not a stable end-user setup.
 
-Manual account entry is available:
+Recommended OpenAI subscription login:
+
+```bash
+cc-router accounts login-openai
+```
+
+This uses the Codex device-code auth flow: the CLI prints a verification URL and one-time code, you approve the login in your browser, and CC-Router saves the resulting OpenAI subscription account record.
+
+Manual account entry is also available for debugging:
 
 ```bash
 cc-router accounts add-openai

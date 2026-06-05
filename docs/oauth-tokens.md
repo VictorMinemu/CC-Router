@@ -117,7 +117,15 @@ Codex subscription auth is a separate provider path from Claude auth. OpenAI sub
 
 These records are not loaded into the Anthropic token pool. They are used only by the OpenAI Responses-compatible `/v1/responses` route.
 
-To add one manually:
+Recommended login:
+
+```bash
+cc-router accounts login-openai
+```
+
+This uses the Codex device-code flow documented by OpenAI's Codex app-server auth surface: CC-Router requests a one-time code from `https://auth.openai.com/api/accounts/deviceauth/usercode`, polls for authorization, exchanges the authorization code at `https://auth.openai.com/oauth/token`, and saves the resulting OpenAI subscription tokens.
+
+To add one manually for debugging:
 
 ```bash
 cc-router accounts add-openai
