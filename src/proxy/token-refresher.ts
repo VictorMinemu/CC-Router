@@ -1,5 +1,5 @@
 import type { Account, RefreshResponse } from "./types.js";
-import { writeAccountsAtomic, serialize } from "../config/manager.js";
+import { writeAnthropicAccountsPreservingOtherProviders, serialize } from "../config/manager.js";
 import { logRefresh } from "./logger.js";
 import { stats } from "./stats.js";
 
@@ -98,7 +98,7 @@ async function _doRefresh(account: Account): Promise<boolean> {
  * Must be called after every successful refresh since refresh_token ROTATES.
  */
 export function saveAccounts(accounts: Account[]): void {
-  writeAccountsAtomic(serialize(accounts));
+  writeAnthropicAccountsPreservingOtherProviders(serialize(accounts));
 }
 
 /**

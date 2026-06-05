@@ -38,9 +38,22 @@ export function readAccountsFromPath(path: string): Account[] {
 // Escritura atómica: escribe a .tmp y renombra — evita JSON corrupto si el proceso muere mid-write
 export function writeAccountsAtomic(data: unknown[]): void {
   ensureConfigDir();
-  const tmp = ACCOUNTS_PATH + ".tmp";
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, data);
+}
+
+function writeAccountsAtomicToPath(path: string, data: unknown[]): void {
+  const tmp = path + ".tmp";
   writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
-  renameSync(tmp, ACCOUNTS_PATH);
+  renameSync(tmp, path);
+}
+
+export function writeAnthropicAccountsPreservingOtherProviders(data: AccountRecord[]): void {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const nonAnthropic = existing.filter(a =>
+    a.provider !== undefined && a.provider !== "anthropic_subscription"
+  );
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, [...data, ...nonAnthropic]);
 }
 
 /** Deserialize flat AccountRecord[] from the default path into runtime Account[] */

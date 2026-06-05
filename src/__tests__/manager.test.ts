@@ -21,6 +21,7 @@ import {
   ensureConfigDir,
   accountsFileExists,
   writeAccountsAtomic,
+  writeAnthropicAccountsPreservingOtherProviders,
   loadAccounts,
   loadOpenAIAccounts,
   readAccountsFromPath,
@@ -112,6 +113,37 @@ describe("writeAccountsAtomic", () => {
     const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
     expect(parsed).toHaveLength(3);
     expect(parsed.map((r: { id: string }) => r.id)).toEqual(["account-1", "account-2", "account-3"]);
+  });
+});
+
+describe("writeAnthropicAccountsPreservingOtherProviders", () => {
+  it("replaces Anthropic records while preserving OpenAI subscription records", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+      },
+    ]);
+
+    writeAnthropicAccountsPreservingOtherProviders([
+      {
+        ...sampleRecord,
+        id: "max-account-updated",
+        accessToken: "sk-ant-oat01-updated",
+      },
+    ]);
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed.map((record: { id: string }) => record.id)).toEqual([
+      "max-account-updated",
+      "openai-victor",
+    ]);
+    expect(parsed[1].provider).toBe("openai_subscription");
   });
 });
 
