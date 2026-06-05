@@ -96,3 +96,4 @@ In Docker mode, `accounts.json` is mounted from the host into the container. The
 | Shell injection in Keychain read | `execFile` with fixed arg array |
 | Malicious body parsing | No `express.json()` on proxy routes |
 | OpenAI and Anthropic tokens mixed | Provider-tagged records; OpenAI accounts are loaded outside the Anthropic pool |
+| OpenAI refresh token rotation loss | Refreshes persist the rotated token immediately while preserving other providers |

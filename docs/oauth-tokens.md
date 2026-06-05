@@ -142,4 +142,11 @@ Content-Type: application/x-www-form-urlencoded
 
 with `grant_type=refresh_token`. Refreshes are also deduplicated per account so two simultaneous requests cannot spend the same rotating refresh token at the same time.
 
+The proxy refreshes OpenAI subscription tokens in two places:
+
+- before forwarding a request when the access token expires within 10 minutes
+- in a background loop every 5 minutes while the proxy is running
+
+Successful refreshes are persisted atomically and preserve Claude account records in the same `accounts.json` file.
+
 Treat OpenAI Codex refresh tokens as account credentials. Do not copy `~/.codex/auth.json` into bug reports, commits, logs, screenshots, or shared chat threads.
