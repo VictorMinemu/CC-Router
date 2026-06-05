@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { needsOpenAIRefresh, prepareOpenAIAccountForRequest, refreshOpenAISubscriptionToken } from "../providers/openai/token-refresher.js";
+import { needsOpenAIRefresh, prepareOpenAIAccountForRequest, refreshOpenAISubscriptionToken, startOpenAIRefreshLoop } from "../providers/openai/token-refresher.js";
 
 describe("OpenAI subscription token refresher", () => {
   afterEach(() => {
@@ -83,5 +83,35 @@ describe("OpenAI subscription token refresher", () => {
 
     expect(ok).toBe(true);
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it("starts a background refresh loop and returns a stopper", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        access_token: "new-access",
+        refresh_token: "new-refresh",
+        expires_in: 3600,
+        token_type: "Bearer",
+      }),
+    } as Response);
+    const account = {
+      id: "openai-victor",
+      provider: "openai_subscription" as const,
+      accessToken: "old-access",
+      refreshToken: "old-refresh",
+      expiresAt: Date.now() + 60_000,
+      enabled: true,
+    };
+    const save = vi.fn();
+
+    const stop = startOpenAIRefreshLoop([account], save);
+    await vi.runOnlyPendingTimersAsync();
+    stop();
+
+    expect(save).toHaveBeenCalled();
+    expect(account.accessToken).toBe("new-access");
+    vi.useRealTimers();
   });
 });

@@ -2,6 +2,7 @@ import type { ProviderAccount } from "../types.js";
 
 const TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token";
 const REFRESH_BUFFER_MS = 10 * 60 * 1000;
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
 const refreshLocks = new Map<string, Promise<boolean>>();
 
@@ -46,6 +47,22 @@ export async function prepareOpenAIAccountForRequest(
   const ok = await refreshOpenAISubscriptionToken(account);
   if (ok) saveAccounts(allAccounts);
   return ok;
+}
+
+export function startOpenAIRefreshLoop(
+  accounts: OpenAISubscriptionAccount[],
+  saveAccounts: (accounts: OpenAISubscriptionAccount[]) => void,
+): () => void {
+  const check = async () => {
+    for (const account of accounts) {
+      await prepareOpenAIAccountForRequest(account, accounts, saveAccounts);
+    }
+  };
+
+  const timer = setInterval(() => { check().catch(console.error); }, CHECK_INTERVAL_MS);
+  queueMicrotask(() => { check().catch(console.error); });
+
+  return () => clearInterval(timer);
 }
 
 async function doRefresh(account: OpenAISubscriptionAccount): Promise<boolean> {

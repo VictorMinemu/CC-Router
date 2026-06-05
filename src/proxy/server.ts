@@ -18,7 +18,7 @@ import { PROXY_PORT, LITELLM_URL } from "../config/paths.js";
 import { writePid, removePid } from "../daemon/pid.js";
 import type { Account, AccountRateLimits, AccountRecord } from "./types.js";
 import { createOpenAIAccountPicker } from "../providers/openai/account-pool.js";
-import { prepareOpenAIAccountForRequest } from "../providers/openai/token-refresher.js";
+import { prepareOpenAIAccountForRequest, startOpenAIRefreshLoop } from "../providers/openai/token-refresher.js";
 import { mountResponsesRoutes } from "./responses-server.js";
 import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
 import chalk from "chalk";
@@ -130,6 +130,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   };
 
   startRefreshLoop(accounts);
+  startOpenAIRefreshLoop(openAIAccounts, saveOpenAIAccounts);
 
   const app = express();
   const proxyRequestTimeoutMs = getProxyRequestTimeoutMs();
