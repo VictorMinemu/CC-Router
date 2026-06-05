@@ -5,6 +5,7 @@ import { saveAccounts } from "../proxy/token-refresher.js";
 import { formatExpiry, redactToken } from "../utils/token-extractor.js";
 import { PROXY_PORT } from "../config/paths.js";
 import { createOpenAIAccountRecord } from "../providers/openai/account-record.js";
+import { loginOpenAIWithDeviceCode } from "../providers/openai/device-oauth.js";
 
 export function registerAccounts(program: Command): void {
   const accounts = program
@@ -157,6 +158,38 @@ export function registerAccounts(program: Command): void {
       console.log(chalk.green(`\n✓ OpenAI account "${record.id}" saved.\n`));
       console.log(chalk.gray("  Restart the proxy to load the new account: cc-router start\n"));
       console.log(chalk.yellow("  Treat this as experimental until the OAuth login wizard lands.\n"));
+    });
+
+  // ── accounts login-openai ────────────────────────────────────────────────
+  accounts
+    .command("login-openai")
+    .description("Sign in to an OpenAI ChatGPT/Codex subscription account with device code")
+    .action(async () => {
+      const { input } = await import("@inquirer/prompts");
+      const accountId = await input({
+        message: "OpenAI account ID:",
+        default: `openai-account-${loadOpenAIAccounts().length + 1}`,
+        validate: (v) => /^[a-zA-Z0-9_-]+$/.test(v) || "Only letters, numbers, _ and - allowed",
+      });
+
+      console.log(chalk.cyan("\nOpenAI Codex device login"));
+      console.log(chalk.gray("This will open no local callback server. You will approve the login in your browser.\n"));
+
+      const record = await loginOpenAIWithDeviceCode({
+        accountId,
+        onDeviceCode: (code) => {
+          console.log(chalk.bold("1. Open this URL:"));
+          console.log(`   ${chalk.cyan(code.verificationUrl)}`);
+          console.log(chalk.bold("2. Enter this code:"));
+          console.log(`   ${chalk.cyan(code.userCode)}\n`);
+          console.log(chalk.gray("Waiting for authorization..."));
+        },
+      });
+
+      upsertAccountRecord(record);
+
+      console.log(chalk.green(`\n✓ OpenAI account "${record.id}" saved via device login.\n`));
+      console.log(chalk.gray("  Restart the proxy to load the new account: cc-router start\n"));
     });
 
   // ── accounts remove ───────────────────────────────────────────────────────
