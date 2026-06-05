@@ -86,6 +86,22 @@ export function loadOpenAIAccounts(path?: string): OpenAISubscriptionAccount[] {
     }));
 }
 
+export function saveOpenAIAccounts(accounts: OpenAISubscriptionAccount[]): void {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const nonOpenAI = existing.filter(a => a.provider !== "openai_subscription");
+  const records: AccountRecord[] = accounts.map(a => ({
+    id: a.id,
+    provider: "openai_subscription",
+    accessToken: a.accessToken,
+    refreshToken: a.refreshToken,
+    expiresAt: a.expiresAt,
+    scopes: ["openid", "profile", "email", "offline_access"],
+    enabled: a.enabled,
+  }));
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, [...nonOpenAI, ...records]);
+}
+
 // ─── Proxy config (password, future settings) ─────────────────────────────────
 
 /**
