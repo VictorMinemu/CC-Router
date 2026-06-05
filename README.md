@@ -380,6 +380,10 @@ Model prefixes:
 | `claude/*` | Claude subscription route |
 | `anthropic/*` | Claude subscription route |
 
+Claude Code can also send a `/v1/messages` request with an `openai/*` model. CC-Router translates that Anthropic Messages request into an OpenAI Responses request and converts the non-streaming JSON response back into an Anthropic-shaped message response.
+
+Current limitation: OpenAI-to-Anthropic streaming event normalization is not complete yet. Use non-streaming requests for the experimental Claude Code -> OpenAI route until the streaming translator lands.
+
 OpenAI subscription account records are separated from Claude accounts with `provider: "openai_subscription"` so they do not enter the Anthropic token pool:
 
 ```json
