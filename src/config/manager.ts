@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { CONFIG_DIR, ACCOUNTS_PATH, CONFIG_PATH } from "./paths.js";
 import type { Account, AccountRecord } from "../proxy/types.js";
 import { DEFAULT_RATE_LIMITS, ACCOUNT_USER_DEFAULTS, clampPercent } from "../proxy/types.js";
+import type { OpenAISubscriptionAccount } from "../providers/openai/token-refresher.js";
 
 export const DEFAULT_PROXY_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -45,6 +46,21 @@ export function writeAccountsAtomic(data: unknown[]): void {
 /** Deserialize flat AccountRecord[] from the default path into runtime Account[] */
 export function loadAccounts(): Account[] {
   return deserialize(readAccountsRaw() as AccountRecord[]);
+}
+
+/** Load OpenAI ChatGPT/Codex subscription accounts without mixing them into the Anthropic pool. */
+export function loadOpenAIAccounts(path?: string): OpenAISubscriptionAccount[] {
+  const records = readRawFromPath(path ?? ACCOUNTS_PATH) as AccountRecord[];
+  return records
+    .filter(a => a.provider === "openai_subscription")
+    .map(a => ({
+      id: a.id,
+      provider: "openai_subscription" as const,
+      accessToken: a.accessToken,
+      refreshToken: a.refreshToken,
+      expiresAt: a.expiresAt,
+      enabled: a.enabled !== false,
+    }));
 }
 
 // ─── Proxy config (password, future settings) ─────────────────────────────────
@@ -140,7 +156,7 @@ export function generateProxySecret(): string {
 // ─── Accounts ─────────────────────────────────────────────────────────────────
 
 function deserialize(records: AccountRecord[]): Account[] {
-  return records.map(a => ({
+  return records.filter(a => a.provider === undefined || a.provider === "anthropic_subscription").map(a => ({
     id: a.id,
     tokens: {
       accessToken: a.accessToken,

@@ -22,6 +22,7 @@ import {
   accountsFileExists,
   writeAccountsAtomic,
   loadAccounts,
+  loadOpenAIAccounts,
   readAccountsFromPath,
   writeConfig,
   getProxyRequestTimeoutMs,
@@ -146,6 +147,50 @@ describe("loadAccounts", () => {
     writeAccountsAtomic([noScopes]);
     const accounts = loadAccounts();
     expect(accounts[0].tokens.scopes).toEqual(["user:inference", "user:profile"]);
+  });
+
+  it("does not include OpenAI subscription records in the Anthropic token pool", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+      },
+    ]);
+
+    expect(loadAccounts().map(a => a.id)).toEqual(["max-account-1"]);
+  });
+});
+
+describe("loadOpenAIAccounts", () => {
+  it("loads OpenAI subscription records separately from Anthropic accounts", () => {
+    writeAccountsAtomic([
+      sampleRecord,
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        scopes: ["openid", "profile", "email", "offline_access"],
+        enabled: true,
+      },
+    ]);
+
+    expect(loadOpenAIAccounts()).toEqual([
+      {
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "openai-access",
+        refreshToken: "openai-refresh",
+        expiresAt: 1999999999000,
+        enabled: true,
+      },
+    ]);
   });
 });
 
