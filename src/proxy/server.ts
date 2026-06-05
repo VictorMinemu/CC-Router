@@ -7,7 +7,7 @@ import type { Socket } from "net";
 import type { Request } from "express";
 import { TokenPool, EmptyPoolError } from "./token-pool.js";
 import { needsRefresh, refreshAccountToken, saveAccounts, startRefreshLoop } from "./token-refresher.js";
-import { loadAccounts, loadOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
+import { loadAccounts, loadOpenAIAccounts, saveOpenAIAccounts, accountsFileExists, readAccountsFromPath, readConfig, serialize, getProxyRequestTimeoutMs } from "../config/manager.js";
 import { checkForUpdate, performUpdate, restartSelf } from "../utils/self-update.js";
 import { trackEvent, startHeartbeat } from "../utils/telemetry.js";
 import { loadTelemetryState } from "../config/telemetry.js";
@@ -18,6 +18,7 @@ import { PROXY_PORT, LITELLM_URL } from "../config/paths.js";
 import { writePid, removePid } from "../daemon/pid.js";
 import type { Account, AccountRateLimits, AccountRecord } from "./types.js";
 import { createOpenAIAccountPicker } from "../providers/openai/account-pool.js";
+import { prepareOpenAIAccountForRequest } from "../providers/openai/token-refresher.js";
 import { mountResponsesRoutes } from "./responses-server.js";
 import { mountMessagesCrossProviderRoute } from "./messages-cross-route.js";
 import chalk from "chalk";
@@ -370,10 +371,12 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   mountResponsesRoutes(app, {
     getOpenAIAccount: pickOpenAIAccount,
+    prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
   });
 
   mountMessagesCrossProviderRoute(app, {
     getOpenAIAccount: pickOpenAIAccount,
+    prepareOpenAIAccount: (account) => prepareOpenAIAccountForRequest(account, openAIAccounts, saveOpenAIAccounts),
   });
 
   // ─── Proxy middleware ──────────────────────────────────────────────────────

@@ -104,4 +104,47 @@ describe("mountResponsesRoutes", () => {
       });
     }
   });
+
+  it("refreshes the selected OpenAI account before forwarding", async () => {
+    const prepare = vi.fn().mockResolvedValue(true);
+    const forward = vi.fn().mockResolvedValue(new Response("{}", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const app = express();
+
+    mountResponsesRoutes(app, {
+      getOpenAIAccount: () => ({
+        id: "openai-victor",
+        provider: "openai_subscription",
+        accessToken: "access",
+        refreshToken: "refresh",
+        expiresAt: Date.now() + 60_000,
+        enabled: true,
+      }),
+      prepareOpenAIAccount: prepare,
+      forwardOpenAI: forward,
+    });
+
+    const server = createServer(app);
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port");
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${address.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/gpt-5.5", input: [] }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(forward).toHaveBeenCalledOnce();
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close(err => err ? reject(err) : resolve());
+      });
+    }
+  });
 });

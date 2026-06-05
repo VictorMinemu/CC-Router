@@ -9,6 +9,7 @@ type ForwardOpenAI = typeof forwardOpenAICodexResponse;
 
 export interface ResponsesRoutesOptions {
   getOpenAIAccount: () => OpenAISubscriptionAccount | null;
+  prepareOpenAIAccount?: (account: OpenAISubscriptionAccount) => Promise<boolean>;
   forwardOpenAI?: ForwardOpenAI;
 }
 
@@ -37,6 +38,7 @@ async function sendUpstreamResponse(upstream: globalThis.Response, res: Response
 
 export function mountResponsesRoutes(app: Express, opts: ResponsesRoutesOptions): void {
   const forwardOpenAI = opts.forwardOpenAI ?? forwardOpenAICodexResponse;
+  const prepareOpenAIAccount = opts.prepareOpenAIAccount ?? (async () => true);
 
   app.post("/v1/responses", express.json({ limit: "10mb" }), async (req: Request, res: Response) => {
     if (!isResponsesRequest(req.body)) {
@@ -66,6 +68,17 @@ export function mountResponsesRoutes(app: Express, opts: ResponsesRoutesOptions)
         error: {
           type: "no_accounts",
           message: "No OpenAI subscription accounts are configured",
+        },
+      });
+      return;
+    }
+
+    const ready = await prepareOpenAIAccount(account);
+    if (!ready) {
+      res.status(401).json({
+        error: {
+          type: "authentication_error",
+          message: "OpenAI subscription token refresh failed",
         },
       });
       return;

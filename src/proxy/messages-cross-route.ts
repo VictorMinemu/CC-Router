@@ -20,6 +20,7 @@ type ForwardOpenAI = typeof forwardOpenAICodexResponse;
 
 export interface MessagesCrossProviderRouteOptions {
   getOpenAIAccount: () => OpenAISubscriptionAccount | null;
+  prepareOpenAIAccount?: (account: OpenAISubscriptionAccount) => Promise<boolean>;
   forwardOpenAI?: ForwardOpenAI;
 }
 
@@ -98,6 +99,7 @@ export function mountMessagesCrossProviderRoute(
   opts: MessagesCrossProviderRouteOptions,
 ): void {
   const forwardOpenAI = opts.forwardOpenAI ?? forwardOpenAICodexResponse;
+  const prepareOpenAIAccount = opts.prepareOpenAIAccount ?? (async () => true);
 
   app.post(
     "/v1/messages",
@@ -132,6 +134,18 @@ export function mountMessagesCrossProviderRoute(
           error: {
             type: "no_accounts",
             message: "No OpenAI subscription accounts are configured",
+          },
+        });
+        return;
+      }
+
+      const ready = await prepareOpenAIAccount(account);
+      if (!ready) {
+        res.status(401).json({
+          type: "error",
+          error: {
+            type: "authentication_error",
+            message: "OpenAI subscription token refresh failed",
           },
         });
         return;
