@@ -22,6 +22,7 @@ import {
   accountsFileExists,
   writeAccountsAtomic,
   writeAnthropicAccountsPreservingOtherProviders,
+  upsertAccountRecord,
   loadAccounts,
   loadOpenAIAccounts,
   readAccountsFromPath,
@@ -144,6 +145,37 @@ describe("writeAnthropicAccountsPreservingOtherProviders", () => {
       "openai-victor",
     ]);
     expect(parsed[1].provider).toBe("openai_subscription");
+  });
+});
+
+describe("upsertAccountRecord", () => {
+  it("adds or replaces a provider-tagged OpenAI record without changing Anthropic records", () => {
+    writeAccountsAtomic([sampleRecord]);
+
+    upsertAccountRecord({
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access",
+      refreshToken: "openai-refresh",
+      expiresAt: 1999999999000,
+      scopes: ["openid"],
+      enabled: true,
+    });
+
+    upsertAccountRecord({
+      id: "openai-primary",
+      provider: "openai_subscription",
+      accessToken: "openai-access-updated",
+      refreshToken: "openai-refresh",
+      expiresAt: 1999999999000,
+      scopes: ["openid"],
+      enabled: true,
+    });
+
+    const parsed = JSON.parse(fs.readFileSync(accountsPath(), "utf-8"));
+    expect(parsed).toHaveLength(2);
+    expect(parsed[0].id).toBe("max-account-1");
+    expect(parsed[1].accessToken).toBe("openai-access-updated");
   });
 });
 

@@ -56,6 +56,16 @@ export function writeAnthropicAccountsPreservingOtherProviders(data: AccountReco
   writeAccountsAtomicToPath(ACCOUNTS_PATH, [...data, ...nonAnthropic]);
 }
 
+export function upsertAccountRecord(record: AccountRecord): void {
+  ensureConfigDir();
+  const existing = readAccountsRaw() as AccountRecord[];
+  const next = [
+    ...existing.filter(a => !(a.id === record.id && a.provider === record.provider)),
+    record,
+  ];
+  writeAccountsAtomicToPath(ACCOUNTS_PATH, next);
+}
+
 /** Deserialize flat AccountRecord[] from the default path into runtime Account[] */
 export function loadAccounts(): Account[] {
   return deserialize(readAccountsRaw() as AccountRecord[]);
