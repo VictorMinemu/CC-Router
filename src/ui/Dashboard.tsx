@@ -8,6 +8,7 @@ import type { ModelEntry, ModelsApi, ModelsStatus } from "./modelsApi.js";
 
 const POLL_INTERVAL_MS = 2_000;
 const LOG_VISIBLE = 20;
+const MODEL_VISIBLE_ROWS = 16;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -727,6 +728,7 @@ function ModelsPanel({
   focused: boolean;
 }) {
   const models = status?.models ?? [];
+  const visible = getVisibleModelWindow(models, selectedIndex, MODEL_VISIBLE_ROWS);
 
   return (
     <Box flexDirection="column">
@@ -745,18 +747,42 @@ function ModelsPanel({
           ? <Text color="gray">  Press [m] to load models from provider APIs</Text>
           : models.length === 0
             ? <Text color="gray">  No models discovered</Text>
-            : models.slice(0, 16).map((model, i) => (
-                <ModelRow
-                  key={model.id}
-                  model={model}
-                  selected={focused && i === selectedIndex}
-                  currentClaude={status.routing.anthropicDefaultModel}
-                  currentOpenAI={status.routing.openAIDefaultModel}
-                />
-              ))}
+            : (
+                <>
+                  <Text color="gray">  showing {visible.start + 1}-{visible.end} of {models.length}</Text>
+                  {visible.rows.map((model, i) => (
+                    <ModelRow
+                      key={model.id}
+                      model={model}
+                      selected={focused && visible.start + i === selectedIndex}
+                      currentClaude={status.routing.anthropicDefaultModel}
+                      currentOpenAI={status.routing.openAIDefaultModel}
+                    />
+                  ))}
+                </>
+              )}
       </Box>
     </Box>
   );
+}
+
+export function getVisibleModelWindow<T>(
+  models: T[],
+  selectedIndex: number,
+  maxRows = MODEL_VISIBLE_ROWS,
+): { rows: T[]; start: number; end: number } {
+  if (models.length <= maxRows) {
+    return { rows: models, start: 0, end: models.length };
+  }
+
+  const selected = Math.max(0, Math.min(selectedIndex, models.length - 1));
+  const start = Math.max(0, Math.min(selected - maxRows + 1, models.length - maxRows));
+  const end = Math.min(models.length, start + maxRows);
+  return {
+    rows: models.slice(start, end),
+    start,
+    end,
+  };
 }
 
 function ModelRow({
