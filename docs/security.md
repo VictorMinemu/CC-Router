@@ -17,7 +17,20 @@ The file contains:
 ]
 ```
 
-**Protect this file:** anyone with access to it can make API requests on behalf of your Claude Max accounts.
+OpenAI subscription records use the same file but are tagged with a provider:
+
+```json
+{
+  "id": "openai-primary",
+  "provider": "openai_subscription",
+  "accessToken": "eyJ...",
+  "refreshToken": "...",
+  "expiresAt": 1999999999000,
+  "scopes": ["openid", "profile", "email", "offline_access"]
+}
+```
+
+**Protect this file:** anyone with access to it can make API requests on behalf of your Claude Max or OpenAI ChatGPT/Codex subscription accounts.
 
 ### File permissions
 
@@ -57,6 +70,8 @@ cc-router only makes outbound connections to:
 |------|---------|
 | `api.anthropic.com` | Forwarding Claude Code requests (standalone mode) |
 | `console.anthropic.com` | OAuth token refresh |
+| `chatgpt.com` | OpenAI Codex subscription Responses route |
+| `auth.openai.com` | OpenAI subscription OAuth token refresh |
 | `localhost:4000` | LiteLLM (full mode only) |
 
 No telemetry, no analytics, no external logging.
@@ -80,3 +95,4 @@ In Docker mode, `accounts.json` is mounted from the host into the container. The
 | Concurrent refresh calls | Per-account lock (`Map<id, Promise>`) |
 | Shell injection in Keychain read | `execFile` with fixed arg array |
 | Malicious body parsing | No `express.json()` on proxy routes |
+| OpenAI and Anthropic tokens mixed | Provider-tagged records; OpenAI accounts are loaded outside the Anthropic pool |

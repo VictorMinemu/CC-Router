@@ -292,6 +292,7 @@ cc-router accounts add       Add an account interactively
 cc-router accounts remove <id>  Remove an account
 
 cc-router configure          (Re)write ~/.claude/settings.json
+cc-router configure codex    (Re)write ~/.codex/config.toml for Codex CLI
 cc-router configure --show   Show current Claude Code proxy settings
 cc-router configure --remove Remove cc-router settings (same as revert without stopping)
 
@@ -340,6 +341,59 @@ cc-router docker up
 ```
 
 See [docs/litellm-setup.md](docs/litellm-setup.md) for details.
+
+---
+
+## Codex CLI support (experimental)
+
+CC-Router can expose an OpenAI Responses-compatible endpoint for Codex CLI at `/v1/responses`. This is the foundation for routing Codex through ChatGPT/Codex subscription accounts while keeping the same router process.
+
+Configure Codex:
+
+```bash
+cc-router configure codex
+```
+
+This writes a managed provider block to `~/.codex/config.toml`:
+
+```toml
+model_provider = "cc-router"
+
+[model_providers.cc-router]
+name = "CC-Router"
+base_url = "http://localhost:3456/v1"
+wire_api = "responses"
+env_key = "CC_ROUTER_TOKEN"
+```
+
+Then run Codex with the proxy secret in `CC_ROUTER_TOKEN` when your router is password-protected:
+
+```bash
+CC_ROUTER_TOKEN=cc-rtr-your-secret codex -m openai/gpt-5.5
+```
+
+Model prefixes:
+
+| Prefix | Upstream |
+|--------|----------|
+| `openai/*` | OpenAI ChatGPT/Codex subscription route |
+| `claude/*` | Claude subscription route |
+| `anthropic/*` | Claude subscription route |
+
+OpenAI subscription account records are separated from Claude accounts with `provider: "openai_subscription"` so they do not enter the Anthropic token pool:
+
+```json
+{
+  "id": "openai-primary",
+  "provider": "openai_subscription",
+  "accessToken": "eyJ...",
+  "refreshToken": "...",
+  "expiresAt": 1999999999000,
+  "scopes": ["openid", "profile", "email", "offline_access"]
+}
+```
+
+The OAuth login wizard for adding these records is still being built. Until then, treat this as an experimental developer path, not a stable end-user setup.
 
 ---
 

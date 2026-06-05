@@ -104,3 +104,26 @@ Content-Type: application/json
 ```
 
 The refresh loop runs every 5 minutes and refreshes any token expiring within 10 minutes. New tokens are written atomically (write to `.tmp`, rename) to prevent file corruption.
+
+## OpenAI ChatGPT/Codex subscription tokens
+
+Codex subscription auth is a separate provider path from Claude auth. OpenAI subscription records in CC-Router are tagged with:
+
+```json
+{
+  "provider": "openai_subscription"
+}
+```
+
+These records are not loaded into the Anthropic token pool. They are used only by the OpenAI Responses-compatible `/v1/responses` route.
+
+OpenAI subscription refreshes use:
+
+```http
+POST https://auth.openai.com/oauth/token
+Content-Type: application/x-www-form-urlencoded
+```
+
+with `grant_type=refresh_token`. Refreshes are also deduplicated per account so two simultaneous requests cannot spend the same rotating refresh token at the same time.
+
+Treat OpenAI Codex refresh tokens as account credentials. Do not copy `~/.codex/auth.json` into bug reports, commits, logs, screenshots, or shared chat threads.
