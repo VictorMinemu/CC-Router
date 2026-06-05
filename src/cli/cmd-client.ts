@@ -120,10 +120,11 @@ export function registerClient(program: Command): void {
     .command("connect [url]")
     .description("Connect Claude Code to a CC-Router server")
     .option("-s, --secret <secret>", "Proxy authentication secret")
+    .option("--model <model>", "Default Claude Code model to send through the router")
     .option("-d, --desktop", "Also configure Claude Desktop interception via mitmproxy")
     .option("--codex", "Also configure Codex CLI to use this remote CC-Router")
     .option("--codex-model <model>", "Default Codex model when using --codex", "openai/default")
-    .action(async (rawUrl?: string, opts?: { secret?: string; desktop?: boolean; codex?: boolean; codexModel?: string }) => {
+    .action(async (rawUrl?: string, opts?: { secret?: string; model?: string; desktop?: boolean; codex?: boolean; codexModel?: string }) => {
       console.log(chalk.bold("\n🔗 CC-Router Client Setup\n"));
 
       // 1. Get remote URL
@@ -159,9 +160,10 @@ export function registerClient(program: Command): void {
       writeConfig(cfg);
 
       // 5. Configure Claude Code
-      writeClaudeSettings(0, url, secret ?? "proxy-managed");
+      writeClaudeSettings(0, url, secret ?? "proxy-managed", opts?.model);
       console.log(chalk.green("✓ Claude Code configured to route through CC-Router"));
       console.log(chalk.gray(`  ANTHROPIC_BASE_URL → ${url}`));
+      if (opts?.model) console.log(chalk.gray(`  model              → ${opts.model}`));
 
       if (opts?.codex) {
         const result = writeCodexRouterConfigFromClient(cfg, {
@@ -201,6 +203,22 @@ export function registerClient(program: Command): void {
     });
 
   // ── cc-router client configure-codex ───────────────────────────────────────
+  client
+    .command("configure-claude")
+    .description("Configure Claude Code from the stored CC-Router client connection")
+    .option("--model <model>", "Default Claude Code model to send through the router")
+    .action((opts: { model?: string }) => {
+      const cfg = readConfig();
+      if (!cfg.client?.remoteUrl) {
+        console.error(chalk.red("✗ Client mode is not configured. Run: cc-router client connect <url>"));
+        process.exit(1);
+      }
+      writeClaudeSettings(0, cfg.client.remoteUrl, cfg.client.remoteSecret ?? "proxy-managed", opts.model);
+      console.log(chalk.green("✓ Claude Code configured to route through CC-Router"));
+      console.log(chalk.gray(`  ANTHROPIC_BASE_URL → ${cfg.client.remoteUrl}`));
+      if (opts.model) console.log(chalk.gray(`  model              → ${opts.model}`));
+    });
+
   client
     .command("configure-codex")
     .description("Configure Codex CLI from the stored CC-Router client connection")

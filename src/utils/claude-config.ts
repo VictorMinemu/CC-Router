@@ -16,8 +16,9 @@ import { readConfig } from "../config/manager.js";
  * @param baseUrl - full proxy URL e.g. "http://192.168.1.50:3456" or "https://cc-router.example.com"
  *                  If omitted, defaults to http://localhost:<port>
  * @param authToken - explicit auth token; when omitted, reads proxySecret from config or uses "proxy-managed"
+ * @param defaultModel - optional Claude Code model, e.g. "openai/default"
  */
-export function writeClaudeSettings(port: number, baseUrl?: string, authToken?: string): void {
+export function writeClaudeSettings(port: number, baseUrl?: string, authToken?: string, defaultModel?: string): void {
   const dir = dirname(CLAUDE_SETTINGS_PATH);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
@@ -36,6 +37,7 @@ export function writeClaudeSettings(port: number, baseUrl?: string, authToken?: 
 
   const updated = {
     ...existing,
+    ...(defaultModel ? { model: defaultModel } : {}),
     env: {
       ...existingEnv,
       ANTHROPIC_BASE_URL: resolvedUrl,
@@ -70,14 +72,16 @@ export function removeClaudeSettings(): void {
 }
 
 /** Read current Claude Code proxy settings (for display) */
-export function readClaudeProxySettings(): { baseUrl?: string; authToken?: string } {
+export function readClaudeProxySettings(): { baseUrl?: string; authToken?: string; model?: string } {
   if (!existsSync(CLAUDE_SETTINGS_PATH)) return {};
   try {
     const raw = JSON.parse(readFileSync(CLAUDE_SETTINGS_PATH, "utf-8")) as Record<string, unknown>;
     const env = raw["env"] as Record<string, unknown> | undefined;
+    if (!env) return {};
     return {
       baseUrl: env?.["ANTHROPIC_BASE_URL"] as string | undefined,
       authToken: env?.["ANTHROPIC_AUTH_TOKEN"] as string | undefined,
+      model: raw["model"] as string | undefined,
     };
   } catch {
     return {};

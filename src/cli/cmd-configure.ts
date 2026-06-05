@@ -154,9 +154,10 @@ export function registerConfigure(program: Command): void {
       }
 
       const port = parseInt(opts.port, 10);
-      writeClaudeSettings(port);
+      writeClaudeSettings(port, undefined, undefined, opts.model);
       const { proxySecret } = readConfig();
       console.log(chalk.green(`✓ Updated ${CLAUDE_SETTINGS_PATH}`));
+      if (opts.model) console.log(chalk.gray(`  model                = ${opts.model}`));
       console.log(chalk.gray(`  ANTHROPIC_BASE_URL  = http://localhost:${port}`));
       console.log(chalk.gray(`  ANTHROPIC_AUTH_TOKEN = ${proxySecret ? chalk.green("(secret configured)") : "proxy-managed"}`));
     });

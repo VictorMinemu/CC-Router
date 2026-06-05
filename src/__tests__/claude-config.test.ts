@@ -96,6 +96,25 @@ describe("writeClaudeSettings", () => {
     const written = JSON.parse(fs.readFileSync(settingsPath(), "utf-8"));
     expect(written.env.ANTHROPIC_BASE_URL).toBe("http://localhost:4567");
   });
+
+  it("writes the selected Claude Code model when provided", () => {
+    writeClaudeSettings(3456, undefined, undefined, "openai/default");
+
+    const written = JSON.parse(fs.readFileSync(settingsPath(), "utf-8"));
+    expect(written.model).toBe("openai/default");
+  });
+
+  it("preserves an existing Claude Code model when no model is provided", () => {
+    fs.writeFileSync(settingsPath(), JSON.stringify({
+      model: "claude-opus-4-6",
+      env: {},
+    }));
+
+    writeClaudeSettings(3456);
+
+    const written = JSON.parse(fs.readFileSync(settingsPath(), "utf-8"));
+    expect(written.model).toBe("claude-opus-4-6");
+  });
 });
 
 // ─── removeClaudeSettings ─────────────────────────────────────────────────────
@@ -150,10 +169,11 @@ describe("readClaudeProxySettings", () => {
   });
 
   it("reads baseUrl and authToken correctly", () => {
-    writeClaudeSettings(3456);
+    writeClaudeSettings(3456, undefined, undefined, "openai/default");
     const result = readClaudeProxySettings();
     expect(result.baseUrl).toBe("http://localhost:3456");
     expect(result.authToken).toBe("proxy-managed");
+    expect(result.model).toBe("openai/default");
   });
 
   it("returns empty object when env block is missing", () => {
