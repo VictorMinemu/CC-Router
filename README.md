@@ -1,7 +1,7 @@
 # CC-Router
 
-**Round-robin proxy for multiple Claude Max accounts.**  
-Distribute Claude Code requests across N subscriptions to multiply your throughput.
+**Local multi-account router for Claude Max and OpenAI ChatGPT/Codex subscriptions.**  
+Distribute Claude Code requests across Claude subscriptions, and expose an OpenAI Responses-compatible route for Codex CLI through the same proxy.
 
 [![npm](https://img.shields.io/npm/v/ai-cc-router)](https://www.npmjs.com/package/ai-cc-router)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,7 +11,9 @@ Distribute Claude Code requests across N subscriptions to multiply your throughp
 ### Features
 
 - **Round-robin token rotation** — distribute requests across 2-20 Claude Max accounts automatically
-- **Transparent proxy** — Claude Code works normally; streaming, thinking, tool use, prompt caching all pass through
+- **Multi-provider routing** — route `openai/*` models to OpenAI ChatGPT/Codex subscription accounts and Claude models to Claude subscriptions
+- **Transparent Claude proxy** — Claude Code works normally; streaming, thinking, tool use, prompt caching all pass through
+- **Codex CLI support** — configure Codex to use CC-Router as a Responses-compatible provider
 - **Automatic token refresh** — OAuth tokens are refreshed before they expire, saved atomically to disk
 - **Rate limit awareness** — detects 429/529 responses and coolsdown accounts; picks the least-loaded one
 - **Client mode** — connect to a remote CC-Router from any machine with one command (`cc-router client connect <url>`)
@@ -42,12 +44,14 @@ Claude Desktop  ─[mitmproxy]─┐  (optional — intercepts api.anthropic.com
 ┌─────────────────────────────────────┐
 │  CC-Router  :3456                   │
 │                                     │
-│  1. Receives request  /v1/messages  │
-│  2. Round-robin → picks account N   │
-│  3. Refreshes token if expiring     │
-│  4. Injects  Authorization: Bearer  │
-│  5. Forwards to Anthropic (or       │
-│     LiteLLM for advanced mode)      │
+│  1. Receives /v1/messages or        │
+│     /v1/responses                   │
+│  2. Parses model provider prefix    │
+│  3. Picks a Claude or OpenAI account│
+│  4. Refreshes token if expiring     │
+│  5. Injects Authorization: Bearer   │
+│  6. Forwards to Anthropic, OpenAI   │
+│     Codex backend, or LiteLLM       │
 └──────────────┬──────────────────────┘
                │
                ▼
@@ -56,7 +60,7 @@ Claude Desktop  ─[mitmproxy]─┐  (optional — intercepts api.anthropic.com
          OAuth token of account N)
 ```
 
-All standard Claude Code features work transparently: streaming, extended thinking, tool use, prompt caching.
+All standard Claude Code features work transparently on the Claude route: streaming, extended thinking, tool use, prompt caching. OpenAI subscription routing is available for Codex-compatible Responses requests and Claude Code cross-routing with the limitations documented below.
 
 **Claude Desktop support** is opt-in and requires a small interceptor (mitmproxy) because Claude Desktop doesn't expose a custom API endpoint setting. See [Claude Desktop support](#claude-desktop-support).
 
@@ -348,7 +352,7 @@ See [docs/litellm-setup.md](docs/litellm-setup.md) for details.
 
 ## Codex CLI support (experimental)
 
-CC-Router can expose an OpenAI Responses-compatible endpoint for Codex CLI at `/v1/responses`. This is the foundation for routing Codex through ChatGPT/Codex subscription accounts while keeping the same router process.
+CC-Router exposes an OpenAI Responses-compatible endpoint for Codex CLI at `/v1/responses`. This lets Codex use OpenAI ChatGPT/Codex subscription accounts through the same local router that Claude Code uses for Claude subscriptions.
 
 Configure Codex:
 
@@ -398,8 +402,6 @@ OpenAI subscription account records are separated from Claude accounts with `pro
   "scopes": ["openid", "profile", "email", "offline_access"]
 }
 ```
-
-The OAuth login wizard for adding these records is still being built. Until then, treat this as an experimental developer path, not a stable end-user setup.
 
 Recommended OpenAI subscription login:
 

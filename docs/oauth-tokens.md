@@ -115,7 +115,7 @@ Codex subscription auth is a separate provider path from Claude auth. OpenAI sub
 }
 ```
 
-These records are not loaded into the Anthropic token pool. They are used only by the OpenAI Responses-compatible `/v1/responses` route.
+These records are not loaded into the Anthropic token pool. They are used by the OpenAI Responses-compatible `/v1/responses` route and by `/v1/messages` requests that explicitly select an `openai/*` model.
 
 Recommended login:
 
